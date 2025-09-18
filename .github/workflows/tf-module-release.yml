@@ -58,7 +58,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -99,7 +99,7 @@ jobs:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Get Semantic Release Config
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ inputs.semantic_release_config_repo }}
           ref: ${{ inputs.semantic_release_config_repo_ref }}
