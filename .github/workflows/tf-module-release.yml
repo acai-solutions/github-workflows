@@ -112,7 +112,7 @@ jobs:
           rm -rf .github/external-workflow-configs/semantic-release/.git 
           cp -r .github/external-workflow-configs/semantic-release/* .
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '20'
 
