@@ -1,0 +1,172 @@
+name: Terraform Module Release
+
+on:
+  workflow_call:
+    inputs:
+      concurrency_group:
+        description: 'Name of concurrency group to manage concurrent github action runs'
+        default: ${{ github.repository }}/${{ github.event.pull_request.head.ref || github.ref }}
+        required: false
+        type: string
+      github_runner:
+        description: 'Name of GitHub-hosted runner or self-hosted runner'
+        default: 'ubuntu-latest'
+        required: false
+        type: string
+      skip_version_injection_folder_prefix:
+        description: 'Comma-separated list of folder prefixes to exclude from version injection'
+        default: ''
+        required: false
+        type: string
+      toggle_branch_protection:
+        description: 'Temporary disable branch protection to allow release action to push updates to changelog'
+        default: true
+        required: false
+        type: boolean
+      semantic_version:
+        description: 'Specify specifying version range for semantic-release'
+        default: '18.0.0'
+        required: false
+        type: string
+      semantic_release_config_repo:
+        description: "Shareable config to create release of Terraform Modules"
+        default: "acai-solutions/github-workflow-configs"
+        required: false
+        type: string
+      semantic_release_config_repo_ref:
+        description: "Ref or branch of semantic_release_config_repo"
+        default: "main"
+        required: false
+        type: string
+      release_branch:
+        description: 'Name of branch on which Terraform Module release should happen'
+        default: 'main'
+        required: false
+        type: string
+    secrets:
+      GH_RELEASE_APP_ID:
+        required: true
+      GH_RELEASE_APP_PRIVATE_KEY:
+        required: true
+
+# Ensures that only one workflow runs at a time
+concurrency: ${{ inputs.concurrency_group }}
+
+jobs:
+  release:
+    runs-on: ${{ inputs.github_runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Get GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_RELEASE_APP_ID }}
+          private-key: ${{ secrets.GH_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Check Branch Protection
+        if: ${{ inputs.toggle_branch_protection }}
+        uses: octokit/request-action@v2.x
+        id: get_branch_protection
+        continue-on-error: true
+        with:
+          route: GET /repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+      
+      - name: Temporarily Disable Branch Protection
+        if: ${{ inputs.toggle_branch_protection && steps.get_branch_protection.outputs.status == '200' }}
+        uses: octokit/request-action@v2.x
+        id: disable_branch_protection
+        with:
+          route: PUT /repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection
+          required_status_checks: |
+            null
+          enforce_admins: |
+            false
+          required_pull_request_reviews: |
+            null
+          restrictions: |
+            null
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Get Semantic Release Config
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.semantic_release_config_repo }}
+          ref: ${{ inputs.semantic_release_config_repo_ref }}
+          path: '.github/external-workflow-configs'
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Copy Folder
+        run: |
+          mkdir -p .github/semantic-release
+          rm -rf .github/external-workflow-configs/semantic-release/.git 
+          cp -r .github/external-workflow-configs/semantic-release/* .
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Execute Semantic Release
+        run: |       
+          npm install && \
+          npm ci && \
+          npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SKIP_VERSION_INJECTION_FOLDER_PREFIX: ${{ inputs.skip_version_injection_folder_prefix }}
+
+      - name: Enable Branch Protection
+        if: ${{ always() && inputs.toggle_branch_protection && steps.get_branch_protection.outputs.status == '200' }}
+        uses: octokit/request-action@v2.x
+        id: enable_branch_protection
+        with:
+          route: PUT /repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection
+          required_status_checks: |
+            {
+              "strict": ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).required_status_checks.strict) || null }},
+              "checks": ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).required_status_checks.checks) || null }}
+            }
+          enforce_admins: |
+            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).enforce_admins.enabled) || null }}
+          required_pull_request_reviews: |
+            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).required_pull_request_reviews) || null }}
+          restrictions: |
+            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).restrictions) || null }}
+          required_linear_history: |
+            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).required_linear_history.enabled) || null }}
+          allow_force_pushes: |
+            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).allow_force_pushes.enabled) || null }}
+          allow_deletions: |
+            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).allow_deletions.enabled) || null }}
+          block_creations: |
+            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).block_creations.enabled) || null }}
+          required_conversation_resolution: |
+            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).required_conversation_resolution.enabled) || null }}
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Workflow Summary
+        if: ${{ always() }}
+        env:
+          TOGGLE_BRANCH_PROTECTION: ${{ fromJSON('[":white_check_mark:", ":x:"]')[inputs.toggle_branch_protection && steps.get_branch_protection.outputs.status == '200'] }}
+          NEW_RELEASE_PUBLISHED: ${{ fromJSON('[":white_check_mark:", ":x:"]')[steps.semantic.outputs.new_release_published != 'true'] }}
+          LAST_RELEASE_VERSION: ${{ steps.semantic.outputs.last_release_version }}
+          NEW_RELEASE_VERSION: ${{ steps.semantic.outputs.new_release_version }}
+        run: |
+          echo '### WORKFLOW SUMMARY :octocat:' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '| result | job |' >> $GITHUB_STEP_SUMMARY
+          echo '|---|---|' >> $GITHUB_STEP_SUMMARY
+          echo '| ${{ env.NEW_RELEASE_PUBLISHED }} | new release published |' >> $GITHUB_STEP_SUMMARY
+          echo '| ${{ env.LAST_RELEASE_VERSION }} | last release version |' >> $GITHUB_STEP_SUMMARY
+          echo '| ${{ env.NEW_RELEASE_VERSION }} | new release version |' >> $GITHUB_STEP_SUMMARY

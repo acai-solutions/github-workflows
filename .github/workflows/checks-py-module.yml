@@ -1,0 +1,122 @@
+---
+name: Python Module Checks
+on:
+  workflow_call:
+    inputs:
+      concurrency_group:
+        description: Name of concurrency group to manage concurrent github action runs
+        default: ${{ github.repository }}/${{ github.head_ref || github.ref_name }}
+        required: false
+        type: string
+      runner_type:
+        description: Type of runner (GitHub-hosted or self-hosted)
+        required: false
+        default: ubuntu-latest
+        type: string
+      commit_user:
+        description: Username which should be used for commits by github action
+        default: github-actions
+        required: false
+        type: string
+      commit_email:
+        description: Email which should be used for commits by github action
+        default: noreply@github.com
+        required: false
+        type: string
+      gh_wf_config_repo:
+        description: Public repo where GitHub workflow config is stored
+        default: acai-solutions/github-workflow-configs
+        required: false
+        type: string
+      gh_wf_config_repo_ref:
+        description: Ref or branch of gh_wf_config_repo
+        default: main
+        required: false
+        type: string
+      linting_include:
+        description: Whether to include Python code quality checks
+        required: false
+        default: true
+        type: boolean
+      linting_allow_failures:
+        description: Whether to allow Python linting failures to pass the pipeline
+        required: false
+        default: false
+        type: boolean
+      python_version:
+        description: Python version
+        default: "3.11"
+        required: false
+        type: string
+      python_lint_config_path:
+        description: Path to python config in gh_wf_config_repo (e.g. "python")
+        default: python
+        required: false
+        type: string
+    outputs:
+      all_steps_passed:
+        description: Indicates if all pipeline steps passed successfully
+        value: ${{ jobs.python_base.outputs.all_steps_passed }}
+      python_base_status:
+        description: Python base pipeline status
+        value: ${{ jobs.python_base.outputs.all_steps_passed }}
+
+concurrency:
+  group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  python_base:
+    if: ${{ always() }}
+    uses: acai-solutions/github-workflows/.github/workflows/python-base.yml@main
+    with:
+      concurrency_group: ${{ inputs.concurrency_group }}
+      runner_type: ${{ inputs.runner_type }}
+      commit_user: ${{ inputs.commit_user }}
+      commit_email: ${{ inputs.commit_email }}
+      gh_wf_config_repo: ${{ inputs.gh_wf_config_repo }}
+      gh_wf_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
+      linting_include: ${{ inputs.linting_include }}
+      linting_allow_failures: ${{ inputs.linting_allow_failures }}
+      python_version: ${{ inputs.python_version }}
+      python_config_path: ${{ inputs.python_lint_config_path }}
+    secrets: inherit
+
+  py_module_checks_summary:
+    needs:
+      - python_base
+    runs-on: ${{ inputs.runner_type }}
+    if: always()
+    steps:
+      - name: Generate Overall Summary
+        run: |
+          echo '# 📊 Python Module Checks - Overall Summary' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '## Pipeline Results' >> $GITHUB_STEP_SUMMARY
+          echo '| Component | Status |' >> $GITHUB_STEP_SUMMARY
+          echo '|-----------|--------|' >> $GITHUB_STEP_SUMMARY
+          echo "| 🐍 Python Base (Quality & Tests) | ${{ needs.python_base.outputs.all_steps_passed == 'true' && '✅ Passed' || needs.python_base.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+
+          PY_BASE_PASSED="${{ needs.python_base.outputs.all_steps_passed == 'true' }}"
+          if [[ "$PY_BASE_PASSED" == "true" ]]; then
+            echo "**🎉 Overall Result: ✅ All checks passed successfully!**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**⚠️ Overall Result: ❌ Some checks failed. Please review the detailed results above.**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Failed Components:" >> $GITHUB_STEP_SUMMARY
+            echo "- Python Base (Quality & Tests)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Check Overall Status
+        if: always()
+        run: |
+          PY_BASE_PASSED="${{ needs.python_base.outputs.all_steps_passed == 'true' }}"
+          if [[ "$PY_BASE_PASSED" != "true" ]]; then
+            echo "::error::Some checks failed. See summary above for details."
+            exit 1
+          fi

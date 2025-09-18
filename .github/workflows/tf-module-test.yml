@@ -1,0 +1,320 @@
+name: Terraform Module Test CI/CD Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      concurrency_group:
+        description: "Name of concurrency group to manage concurrent github action runs"
+        default: ${{ github.repository }}/${{ github.event.pull_request.head.ref || github.ref }}
+        required: false
+        type: string
+      runner_type:
+        description: "Type of runner (GitHub-hosted or self-hosted)"
+        required: false
+        default: "ubuntu-latest"
+        type: string
+      tfc_hostname:
+        description: "Hostname for terraform cloud/enterprise"
+        default: "app.terraform.io"
+        required: false
+        type: string
+      terraform_version:
+        description: "Terraform version used for Terratest"
+        default: "latest"
+        required: false
+        type: string
+      registry_hostname:
+        description: "Hostname for terraform registry used to download providers"
+        default: "registry.terraform.io"
+        required: false
+        type: string
+      terratest_config_repo:
+        description: "Public repo where terratest matrix json is stored"
+        default: "acai-solutions/github-workflow-configs"
+        required: false
+        type: string
+      terratest_config_repo_ref:
+        description: "Ref or branch of terratest_config_repo"
+        default: "main"
+        required: false
+        type: string
+      terratest_config_repo_path:
+        description: 'Path to terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws/matrix.json")'
+        default: "aws/matrix_tf1x0x0_aws4x5x0.json"
+        required: false
+        type: string
+      terratest_path:
+        description: "Path to terratest directory"
+        default: "test/terratest"
+        required: false
+        type: string
+      terratest_examples_path:
+        description: "Path to terratest examples directory"
+        default: "examples"
+        required: false
+        type: string
+      terratest_max_parallel:
+        description: "Maximum number of terratest runs that should run simultaneously"
+        default: 1
+        required: false
+        type: number
+    secrets:
+      GH_REPO_READ_APP_ID:
+        required: true
+      GH_REPO_READ_APP_PRIVATE_KEY:
+        required: true
+      TFC_API_TOKEN:
+        required: true
+      AWS_TESTBED_ACCESS_KEY_ID:
+        required: true
+      AWS_TESTBED_SECRET_ACCESS_KEY:
+        required: true
+      AWS_TESTBED_DEFAULT_REGION:
+        required: true
+    outputs: 
+      all_checks_passed: 
+        description: "all_steps_passed"
+        value: ${{ jobs.terratest_run.outputs.terratest_status == 'success' }}
+
+jobs:
+  terratest_config:
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      matrix: ${{ steps.set_matrix.outputs.matrix }}
+
+    steps:
+      # Obtain GitHub App installation token for repo access
+      - name: Get GitHub App Token
+        if: ${{ inputs.terratest_config_repo_path != '' }}
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_REPO_READ_APP_ID }}
+          private-key: ${{ secrets.GH_REPO_READ_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout
+        if: ${{ inputs.terratest_config_repo_path != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.terratest_config_repo }}
+          ref: ${{ inputs.terratest_config_repo_ref }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Get Terratest Matrix Config
+        if: ${{ inputs.terratest_config_repo_path != '' }}
+        id: set_matrix
+        run: |
+          JSON=$(cat terraform/terratest/${{ inputs.terratest_config_repo_path }} | jq -c .)
+          echo "matrix=$JSON" >> $GITHUB_OUTPUT
+
+  terratest_run:
+    needs:
+      - terratest_config
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      terratest_status: ${{ steps.terratest_summary.outcome }}
+
+    strategy:
+      max-parallel: ${{ inputs.terratest_max_parallel }}
+      matrix: ${{ fromJson(needs.terratest_config.outputs.matrix) }}
+
+    steps:
+      # should replace Set Git Access Token step
+      - name: Get GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_REPO_READ_APP_ID }}
+          private-key: ${{ secrets.GH_REPO_READ_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      # Configure git to use the GitHub App token for any github.com fetches (modules, submodules, etc.)
+      - name: Configure Git to use App Token
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf https://github.com/
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: true
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache-dependency-path: ${{ inputs.terratest_path }}/go.sum
+
+      - name: Verify Repository Structure
+        run: |
+          echo "Repository structure:"
+          find . -maxdepth 3 -type d -not -path "*/\.*" | sort
+          
+          echo "Checking for ${{ inputs.terratest_path }} directory..."
+          if [ -d "${{ inputs.terratest_path }}" ]; then
+            echo "✅ ${{ inputs.terratest_path }} directory exists"
+          else
+            echo "❌ ${{ inputs.terratest_path }} directory not found"
+            exit 1
+          fi
+          
+          echo "Checking for examples directory..."
+          if [ -d "examples" ]; then
+            echo "✅ examples directory exists"
+          else
+            echo "❌ examples directory not found - creating it"
+            mkdir -p examples/complete
+          fi
+          
+          echo "Checking for examples/complete directory..."
+          if [ -d "examples/complete" ]; then
+            echo "✅ examples/complete directory exists"
+          else
+            echo "❌ examples/complete directory not found - creating it"
+            mkdir -p examples/complete
+          fi
+
+      - name: Get Dependencies
+        working-directory: ${{ inputs.terratest_path }}
+        run: |
+          go get -v -t -d
+          wget https://github.com/gruntwork-io/terratest/releases/download/v0.40.6/terratest_log_parser_linux_amd64
+          chmod +x terratest_log_parser_linux_amd64
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ matrix.terraform_version }}
+          terraform_wrapper: false
+          cli_config_credentials_hostname: ${{ inputs.tfc_hostname }}
+          cli_config_credentials_token: ${{ secrets.TFC_API_TOKEN }}
+
+      - name: Output Terraform Version
+        run: terraform version
+
+      - name: Generate Terraform Lock File
+        if: ${{ matrix.provider_version != '' }}
+        id: terraform_lock_file
+        working-directory: ${{ inputs.terratest_examples_path }}
+        env:
+          PROVIDER_JSON: ${{ toJson(matrix.provider_version) }}
+        run: |
+          for d in */; do
+            # create artifact name for github action
+            artifact_name="terraform version $(echo "${{ matrix.terraform_version }}")<br>"
+            # mainize terraform lock file
+            touch "$d/.terraform.lock.hcl"
+            # get required provider versions from matrix json
+            for provider in $(jq -r 'keys | .[]' <<< $PROVIDER_JSON); do
+              version=$(jq -r ".\"$provider\"" <<< $PROVIDER_JSON)
+              # get provider version if contains X from terraform registry
+              if [[ "$version" == *"X"* ]]; then
+                for i in $(curl -s https://registry.terraform.io/v1/providers/$provider | jq -r '.versions' | jq 'reverse' | jq '.[]'); do
+                  i=$(echo $i | tr -d '"')
+                  declare -a semver
+                  semver=($(echo "$version" | tr '.' '\n'))
+                  # if X is on first position
+                  if [[ "${semver[0]}" == "X" ]]; then
+                    version=$i
+                    break;
+                  # if X is on second position
+                  elif [[ "${semver[1]}" == "X" ]]; then
+                    if [[ $i == "${semver[0]}."* ]]; then
+                      version=$i
+                      break;
+                    fi
+                  # if X is on third position
+                  elif [[ "${semver[2]}" == "X" ]]; then
+                    if [[ $i == "${semver[0]}.${semver[1]}."* ]]; then
+                      version=$i
+                      break;
+                    fi
+                  fi
+                done
+              elif [[ "$version" == "FROM_REQUIREMENTS" ]]; then
+                version_match=$(grep -zoP 'required_providers\W*\{\W*aws(.|\n)*?version\W*\"\D*?(\d+\.\d+\.?\d*)\"' $GITHUB_WORKSPACE/*.tf | grep -zoP '[\d+\.]*\"$')
+                version=$(echo $version_match | grep -zoP '[\d\.]+')
+                num="${version//[^.]}"
+                count="${#num}"
+                if [[ $count == 1 ]]; then
+                  version="$version.0"
+                fi
+              fi
+              # append provider versions to artifact name
+              artifact_name+="provider $(echo "$provider" | sed 's:\/:\.:g') = ${version}<br>"
+              # generate terraform lock file for each provider in each terratest example directory
+              echo -en "provider \"${{ inputs.registry_hostname }}/$provider\" {\n  version = \"$version\"\n}\n\n" >> "$d/.terraform.lock.hcl"
+            done
+            cat "$d/.terraform.lock.hcl"
+            echo "artifact_name=${artifact_name}" >> $GITHUB_OUTPUT
+          done
+
+      - name: Run Terratest
+        id: terratest_run
+        working-directory: ${{ inputs.terratest_path }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_TESTBED_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_TESTBED_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_TESTBED_DEFAULT_REGION }}
+        run: |
+          go test -v -timeout 60m 2>&1 | tee >(./terratest_log_parser_linux_amd64)
+          test ${PIPESTATUS[0]} -eq 0
+          echo "./out/summary.log"
+        continue-on-error: true
+
+      - name: Terratest Summary
+        if: ${{ always() }}
+        id: terratest_summary
+        working-directory: ${{ inputs.terratest_path }}
+        run: |
+          echo '### TERRATEST SUMMARY :octocat:' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.terraform_lock_file.outputs.artifact_name }}' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '| result | test |' >> $GITHUB_STEP_SUMMARY
+          echo '|---|---|' >> $GITHUB_STEP_SUMMARY
+
+          if [[ ! -f "./out/summary.log" ]]; then
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo ":x: missing terratest log file 'summary.log'" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          test_exists=false
+          test_failed=false
+          while IFS= read -r line
+          do
+            if [[ "$line" == *"--- PASS"* ]]; then
+              echo "| $line |" | sed 's/--- PASS:/:white_check_mark: |/g' >> $GITHUB_STEP_SUMMARY
+              test_exists=true
+            elif [[ "$line" == *"--- FAIL"* ]]; then
+              echo "| $line |" | sed 's/--- FAIL:/:x: |/g' >> $GITHUB_STEP_SUMMARY
+              test_exists=true
+              test_failed=true
+            fi
+          done < "./out/summary.log"
+
+          if [[ $test_exists == false ]]; then
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo ":x: no terratest results found in 'summary.log'" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          elif [[ $test_failed == true ]]; then
+            exit 1
+          fi
+        continue-on-error: true
+
+      - name: Terratest Outcome
+        if: ${{ steps.terratest_summary.outcome == 'failure' || steps.terratest_summary.outputs.exitcode == '1' }}
+        run: exit 1
+
+  consume_outputs:
+    needs: [terratest_run]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Use Outputs Steps
+        run: |
+          echo '### Workflow Outputs Summary' >> $GITHUB_STEP_SUMMARY
+          echo '| Step | Status  |' >> $GITHUB_STEP_SUMMARY
+          echo '|---|---|' >> $GITHUB_STEP_SUMMARY
+          echo "| Terratest Run | ${{ needs.terratest_run.outputs.terratest_status  }} |" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,427 @@
+name: Python Module Base CI/CD Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      concurrency_group:
+        description: "Name of concurrency group to manage concurrent github action runs"
+        default: ${{ github.repository }}/${{ github.event.pull_request.head.ref || github.ref }}
+        required: false
+        type: string
+      runner_type:
+        description: "Type of runner (GitHub-hosted or self-hosted)"
+        required: false
+        default: "ubuntu-latest"
+        type: string
+      commit_user:
+        description: "Username which should be used for commits by github action"
+        default: "github-actions"
+        required: false
+        type: string
+      commit_email:
+        description: "Email which should be used for commits by github action"
+        default: "noreply@github.com"
+        required: false
+        type: string
+      # GitHub Workflow config repo details
+      gh_wf_config_repo:
+        description: "Public repo where Python linting config is stored"
+        default: "acai-solutions/github-workflow-configs"
+        required: false
+        type: string
+      gh_wf_config_repo_ref:
+        description: "Ref or branch of gh_wf_config_repo"
+        default: "main"
+        required: false
+        type: string
+        
+      linting_include:
+        description: "Whether to include Python or TFLint code quality checks"
+        required: false
+        default: true
+        type: boolean
+      linting_allow_failures:
+        description: "Whether to allow Python linting failures to pass the pipeline"
+        required: false
+        default: false
+        type: boolean
+
+      python_version:
+        description: "Python version"
+        default: "3.11"
+        required: false
+        type: string
+      python_config_path:
+        description: 'Path to python config in python_config_repo (e.g. "python")'
+        default: "python"
+        required: false
+        type: string
+
+    outputs:
+      all_steps_passed:
+        description: "Indicates if all pipeline steps passed successfully"
+        value: ${{ jobs.python_black.outputs.black_status == 'success' && jobs.python_isort.outputs.isort_status == 'success' && (inputs.linting_allow_failures || jobs.python_flake8.outputs.flake8_status == 'success') && jobs.python_bandit.outputs.bandit_status == 'success' }}
+
+# Add defaults so all `run:` steps use bash
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  python_black:
+    if: ${{ inputs.linting_include }}
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      black_status: ${{ steps.black_commit.outputs.diff == 'false' && 'success' || 'failure' }}
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Black
+        run: pip install black
+
+      - name: Run Black Check
+        id: black
+        continue-on-error: true
+        run: |
+          if black --check --diff .; then
+            echo "✅ Black formatting check passed"
+            echo "needs_format=false" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Black found formatting issues"
+            echo "needs_format=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Apply Black Formatting
+        if: steps.black.outputs.needs_format == 'true'
+        run: |
+          echo "Applying Black formatting..."
+          black .
+          echo "✅ Black formatting applied"
+
+      - name: Commit and Push Changes
+        id: black_commit
+        run: |
+          git config --local user.name "${{ inputs.commit_user }}"
+          git config --local user.email "${{ inputs.commit_email }}"
+          
+          if [[ -z $(git status -s) ]]; then
+              echo "✅ No changes needed"
+              echo "diff=false" >> $GITHUB_OUTPUT
+          else
+              echo "📝 Committing formatting changes..."
+              git add -A
+              git commit -m "style(black): format Python code"
+              echo "diff=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push Changes
+        if: steps.black_commit.outputs.diff == 'true'
+        uses: ad-m/github-push-action@v1.0.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+  python_isort:
+    if: ${{ inputs.linting_include }}
+    needs: python_black
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      isort_status: ${{ steps.isort_commit.outputs.diff == 'false' && 'success' || 'failure' }}
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # Pull any changes from black job
+      - name: Pull Latest Changes
+        run: git pull origin ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install isort
+        run: pip install isort
+
+      - name: Run isort Check
+        id: isort
+        continue-on-error: true
+        run: |
+          if isort --check-only --diff .; then
+            echo "✅ Import sorting check passed"
+            echo "needs_sort=false" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ isort found import issues"
+            echo "needs_sort=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Apply isort
+        if: steps.isort.outputs.needs_sort == 'true'
+        run: |
+          echo "Applying import sorting..."
+          isort .
+          echo "✅ Import sorting applied"
+
+      - name: Commit and Push Changes
+        id: isort_commit
+        run: |
+          git config --local user.name "${{ inputs.commit_user }}"
+          git config --local user.email "${{ inputs.commit_email }}"
+          
+          if [[ -z $(git status -s) ]]; then
+              echo "✅ No changes needed"
+              echo "diff=false" >> $GITHUB_OUTPUT
+          else
+              echo "📝 Committing import sorting changes..."
+              git add -A
+              git commit -m "style(isort): sort Python imports"
+              echo "diff=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push Changes
+        if: steps.isort_commit.outputs.diff == 'true'
+        uses: ad-m/github-push-action@v1.0.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+  python_flake8:
+    if: ${{ inputs.linting_include }}
+    needs: [python_black, python_isort]
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      flake8_status: ${{ steps.flake8.outcome }}
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # Pull any changes from previous jobs
+      - name: Pull Latest Changes
+        run: git pull origin ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Flake8
+        run: pip install flake8 flake8-json
+
+      - name: Get Flake8 Config from Central Repo
+        id: get_config
+        run: |
+          echo "Fetching Flake8 config from: ${{ inputs.gh_wf_config_repo }}/${{ inputs.python_config_path }}/.flake8@${{ inputs.gh_wf_config_repo_ref }}"
+          
+          # Try to download the config file
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github.v3.raw" \
+            "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.python_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
+          
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n 1)
+          CONTENT=$(echo "$HTTP_RESPONSE" | head -n -1)
+          
+          if [[ "$HTTP_CODE" == "200" ]]; then
+            echo "$CONTENT" > .flake8
+            echo "✅ Successfully downloaded Flake8 config from central repo"
+            echo "config_source=remote" >> $GITHUB_OUTPUT
+            echo "Content preview:"
+            head -20 .flake8
+          elif [[ "$HTTP_CODE" == "404" ]]; then
+            echo "⚠️ Flake8 config not found in central repo at ${{ inputs.python_config_path }}/.flake8"
+            echo "config_source=none" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Failed to download Flake8 config. HTTP Status: $HTTP_CODE"
+            echo "Response: $CONTENT"
+            echo "config_source=none" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Flake8
+        id: flake8
+        continue-on-error: ${{ inputs.linting_allow_failures }}
+        run: |
+          echo "Running Flake8 linting checks..."
+          echo "Config source: ${{ steps.get_config.outputs.config_source }}"
+          
+          # Run flake8 for JSON report (ignore exit code for now)
+          flake8 . --format=json --output-file=flake8-report.json || true
+          
+          # Run flake8 with standard output and capture exit code
+          if flake8 . --statistics --count; then
+            echo "✅ Flake8 check passed - no issues found"
+            exit 0
+          else
+            echo "❌ Flake8 found issues"
+            if [[ "${{ inputs.linting_allow_failures }}" == "true" ]]; then
+              echo "⚠️ Continuing despite errors (linting_allow_failures=true)"
+            fi
+            # Exit with error code to fail the step
+            exit 1
+          fi
+
+      - name: Upload Flake8 Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake8-report
+          path: flake8-report.json
+
+  python_bandit:
+    if: ${{ inputs.linting_include }}
+    needs: [python_black, python_isort]
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      bandit_status: ${{ steps.bandit.outcome }}
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # Pull any changes from previous jobs
+      - name: Pull Latest Changes
+        run: git pull origin ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Bandit
+        run: pip install bandit
+
+      - name: Run Bandit
+        id: bandit
+        continue-on-error: false
+        run: |
+          echo "Running Bandit security scan..."
+          bandit -r . -f json -o bandit-report.json
+          bandit -r . -f txt
+
+      - name: Upload Bandit Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
+
+  python_consume_outputs:
+    needs: [python_black, python_isort, python_flake8, python_bandit]
+    runs-on: ${{ inputs.runner_type }}
+    if: always()
+    steps:
+      - name: Output Summary (checks disabled)
+        if: ${{ inputs.linting_include != true }}
+        run: |
+          echo '# 🐍 Python Module Base Pipeline' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '> ⏭️ Linting and security checks are disabled (linting_include: false).' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '**🎉 Overall Result: ✅ All checks passed (nothing to run)**' >> $GITHUB_STEP_SUMMARY
+
+      - name: Output Summary
+        if: ${{ inputs.linting_include == true }}
+        run: |
+          echo '# 🐍 Python Module Base Pipeline' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          
+          # Add warning banner if flake8 failed but is allowed to continue
+          if [[ "${{ needs.python_flake8.outputs.flake8_status }}" != "success" ]] && [[ "${{ inputs.linting_allow_failures }}" == "true" ]]; then
+            echo '> ⚠️ **Warning:** Flake8 found linting issues but the pipeline is configured to continue (`linting_allow_failures: true`)' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo '## Code Quality & Security Results' >> $GITHUB_STEP_SUMMARY
+          echo '| Check | Status |' >> $GITHUB_STEP_SUMMARY
+          echo '|-------|--------|' >> $GITHUB_STEP_SUMMARY
+          echo "| 🖤 Black Formatting | ${{ needs.python_black.outputs.black_status == 'success' && '✅ Passed' || '⚠️ Code formatted' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 Import Sorting (isort) | ${{ needs.python_isort.outputs.isort_status == 'success' && '✅ Passed' || '⚠️ Imports sorted' }} |" >> $GITHUB_STEP_SUMMARY
+          
+          # Properly handle Flake8 status
+          if [[ "${{ needs.python_flake8.outputs.flake8_status }}" == "success" ]]; then
+            echo "| 🔍 Linting (Flake8) | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ inputs.linting_allow_failures }}" == "true" ]]; then
+            echo "| 🔍 Linting (Flake8) | ⚠️ Issues found (allowed to fail) |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 🔍 Linting (Flake8) | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "| 🛡️ Security (Bandit) | ${{ needs.python_bandit.outputs.bandit_status == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          
+          echo '' >> $GITHUB_STEP_SUMMARY
+          
+          # Calculate overall status
+          OVERALL_STATUS="true"
+          
+          if [[ "${{ needs.python_black.outputs.black_status }}" != "success" ]]; then
+            OVERALL_STATUS="false"
+          fi
+          
+          if [[ "${{ needs.python_isort.outputs.isort_status }}" != "success" ]]; then
+            OVERALL_STATUS="false"
+          fi
+          
+          if [[ "${{ needs.python_flake8.outputs.flake8_status }}" != "success" ]] && [[ "${{ inputs.linting_allow_failures }}" != "true" ]]; then
+            OVERALL_STATUS="false"
+          fi
+          
+          if [[ "${{ needs.python_bandit.outputs.bandit_status }}" != "success" ]]; then
+            OVERALL_STATUS="false"
+          fi
+          
+          if [[ "$OVERALL_STATUS" == "true" ]]; then
+            echo "**🎉 Overall Result: ✅ All checks passed**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**⚠️ Overall Result: ❌ Some checks failed or code was auto-formatted**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Create PR Comment for Warnings
+        if: inputs.linting_include == true && needs.python_flake8.outputs.flake8_status != 'success' && inputs.linting_allow_failures == true && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = context.issue.number;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            
+            const comment = `## ⚠️ Flake8 Linting Warnings
+            
+            This PR has linting issues that should be addressed:
+            - Unused imports (F401)
+            - Trailing whitespace (W291)  
+            - Complex functions (C901)
+            - Import ordering issues (E402)
+            
+            While the pipeline is configured to continue despite these issues, please consider fixing them for better code quality.
+            
+            Run \`flake8 .\` locally to see all issues.`;
+            
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: issueNumber,
+              body: comment
+            });
