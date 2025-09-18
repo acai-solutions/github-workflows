@@ -102,7 +102,7 @@ concurrency:
 jobs:
   terraform_base:
     if: ${{ always() }}
-    uses: acai-solutions/github-workflows/.github/workflows/tf-base.yml@v250917
+    uses: acai-solutions/github-workflows/.github/workflows/tf-base.yml@main
     with:
       concurrency_group: ${{ inputs.concurrency_group }}
       runner_type: ${{ inputs.runner_type }}
@@ -115,7 +115,7 @@ jobs:
     needs:
       - terraform_base
     if: ${{ needs.terraform_base.result == 'success' }}
-    uses: acai-solutions/github-workflows/.github/workflows/tf-security.yml@v250917
+    uses: acai-solutions/github-workflows/.github/workflows/tf-security.yml@main
     with:
       concurrency_group: ${{ inputs.concurrency_group }}
       runner_type: ${{ inputs.runner_type }}
@@ -132,7 +132,7 @@ jobs:
   terraform_module_test:
     needs:
       - terraform_security
-    uses: acai-solutions/github-workflows/.github/workflows/tf-module-test.yml@v250917
+    uses: acai-solutions/github-workflows/.github/workflows/tf-module-test.yml@main
     if: ${{ inputs.run_tests && needs.terraform_security.outputs.all_checks_passed == 'true' }}
     with:
       terratest_config_repo: acai-solutions/github-workflow-configs

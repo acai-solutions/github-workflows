@@ -204,7 +204,7 @@ jobs:
           for d in */; do
             # create artifact name for github action
             artifact_name="terraform version $(echo "${{ matrix.terraform_version }}")<br>"
-            # v250917ize terraform lock file
+            # mainize terraform lock file
             touch "$d/.terraform.lock.hcl"
             # get required provider versions from matrix json
             for provider in $(jq -r 'keys | .[]' <<< $PROVIDER_JSON); do

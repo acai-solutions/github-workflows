@@ -135,10 +135,10 @@ jobs:
           EOF
           fi
 
-      - name: v250917ize TFLint
+      - name: mainize TFLint
         if: ${{ inputs.linting_include }}
         run: |
-          echo "v250917izing TFLint with config:"
+          echo "mainizing TFLint with config:"
           cat .tflint.hcl
           echo ""
           tflint --init

@@ -72,7 +72,7 @@ defaults:
 jobs:
   python_base:
     if: ${{ always() }}
-    uses: acai-solutions/github-workflows/.github/workflows/python-base.yml@v250917
+    uses: acai-solutions/github-workflows/.github/workflows/python-base.yml@main
     with:
       concurrency_group: ${{ inputs.concurrency_group }}
       runner_type: ${{ inputs.runner_type }}
