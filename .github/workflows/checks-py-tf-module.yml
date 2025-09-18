@@ -1,0 +1,205 @@
+---
+name: Python + Terraform Module Checks
+on:
+  workflow_call:
+    inputs:
+      concurrency_group:
+        description: Name of concurrency group to manage concurrent GitHub Action runs
+        default: ${{ github.repository }}/${{ github.head_ref || github.ref_name }}
+        required: false
+        type: string
+      runner_type:
+        description: Type of runner (GitHub-hosted or self-hosted)
+        required: false
+        default: ubuntu-latest
+        type: string
+      commit_user:
+        description: Username for commits by GitHub Action
+        default: github-actions
+        required: false
+        type: string
+      commit_email:
+        description: Email for commits by GitHub Action
+        default: noreply@github.com
+        required: false
+        type: string
+      gh_wf_config_repo:
+        description: Public repo where GitHub workflow config is stored
+        default: acai-solutions/github-workflow-configs
+        required: false
+        type: string
+      gh_wf_config_repo_ref:
+        description: Ref or branch of gh_wf_config_repo
+        default: main
+        required: false
+        type: string
+
+      # Python inputs
+      linting_include:
+        description: Whether to include linting/code quality checks
+        required: false
+        default: true
+        type: boolean
+      linting_allow_failures:
+        description: Whether to allow linting failures to pass the pipeline
+        required: false
+        default: false
+        type: boolean
+      python_version:
+        description: Python version
+        default: "3.11"
+        required: false
+        type: string
+      python_lint_config_path:
+        description: Path to python config in gh_wf_config_repo (e.g. "python")
+        default: python
+        required: false
+        type: string
+
+      # Terraform inputs
+      tf_version:
+        description: Terraform version used for formatting and docs
+        default: latest
+        required: false
+        type: string
+      tf_lint_config_path:
+        description: Path to tflint config in gh_wf_config_repo (e.g. "aws/.tflint.hcl")
+        default: .tflint.hcl
+        required: false
+        type: string
+      tf_lint_version:
+        description: TFLint version to use
+        default: latest
+        required: false
+        type: string
+      tf_trivy_version:
+        description: Trivy version to use
+        default: latest
+        required: false
+        type: string
+      tf_checkov_failures_allow:
+        description: Whether to abort the workflow if Checkov checks fail
+        required: false
+        default: false
+        type: boolean
+      run_tests:
+        description: Whether to run Terraform (Terratest) tests
+        required: false
+        default: true
+        type: boolean
+    outputs:
+      all_checks_passed:
+        description: True if both Python and Terraform checks passed
+        value: ${{ jobs.python_checks.outputs.all_steps_passed == 'true' &&
+          jobs.terraform_checks.outputs.all_checks_passed == 'true' }}
+      python_status:
+        description: Python checks status
+        value: ${{ jobs.python_checks.outputs.all_steps_passed }}
+      terraform_status:
+        description: Terraform checks status
+        value: ${{ jobs.terraform_checks.outputs.all_checks_passed }}
+      terraform_base_status:
+        description: Terraform base pipeline status
+        value: ${{ jobs.terraform_checks.outputs.terraform_base_status }}
+      terraform_security_status:
+        description: Terraform security checks status
+        value: ${{ jobs.terraform_checks.outputs.security_status }}
+      terraform_test_status:
+        description: Terraform tests status
+        value: ${{ jobs.terraform_checks.outputs.security_test_status }}
+
+concurrency:
+  group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
+  cancel-in-progress: true
+
+jobs:
+  # 1) Run Python checks first
+  python_checks:
+    uses: ./.github/workflows/checks-py-module.yml
+    with:
+      concurrency_group: ${{ format('{0}:py', inputs.concurrency_group) }}
+      runner_type: ${{ inputs.runner_type }}
+      commit_user: ${{ inputs.commit_user }}
+      commit_email: ${{ inputs.commit_email }}
+      gh_wf_config_repo: ${{ inputs.gh_wf_config_repo }}
+      gh_wf_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
+      linting_include: ${{ inputs.linting_include }}
+      linting_allow_failures: ${{ inputs.linting_allow_failures }}
+      python_version: ${{ inputs.python_version }}
+      python_lint_config_path: ${{ inputs.python_lint_config_path }}
+    secrets: inherit
+
+  # 2) Then run Terraform checks (only if Python passed)
+  terraform_checks:
+    needs:
+      - python_checks
+    if: ${{ needs.python_checks.outputs.all_steps_passed == 'true' }}
+    uses: ./.github/workflows/checks-tf-module.yml
+    with:
+      concurrency_group: ${{ format('{0}:tf', inputs.concurrency_group) }}
+      runner_type: ${{ inputs.runner_type }}
+      commit_user: ${{ inputs.commit_user }}
+      commit_email: ${{ inputs.commit_email }}
+      gh_wf_config_repo: ${{ inputs.gh_wf_config_repo }}
+      gh_wf_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
+      linting_include: ${{ inputs.linting_include }}
+      linting_allow_failures: ${{ inputs.linting_allow_failures }}
+      tf_version: ${{ inputs.tf_version }}
+      tf_lint_config_path: ${{ inputs.tf_lint_config_path }}
+      tf_lint_version: ${{ inputs.tf_lint_version }}
+      tf_trivy_version: ${{ inputs.tf_trivy_version }}
+      tf_checkov_failures_allow: ${{ inputs.tf_checkov_failures_allow }}
+      python_version: ${{ inputs.python_version }}
+      run_tests: ${{ inputs.run_tests }}
+    secrets: inherit
+
+  tf_py_checks_summary:
+    needs:
+      - python_checks
+      - terraform_checks
+    runs-on: ${{ inputs.runner_type }}
+    if: always()
+    steps:
+      - name: Generate Overall Summary
+        shell: bash
+        run: |
+          echo '# 📊 Python + Terraform Module Checks - Overall Summary' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '## Pipeline Results' >> $GITHUB_STEP_SUMMARY
+          echo '| Component | Status |' >> $GITHUB_STEP_SUMMARY
+          echo '|-----------|--------|' >> $GITHUB_STEP_SUMMARY
+
+          echo "| 🐍 Python Module Checks | ${{ needs.python_checks.outputs.all_steps_passed == 'true' && '✅ Passed' || needs.python_checks.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🛠️ Terraform Module Checks | ${{ needs.terraform_checks.outputs.all_checks_passed == 'true' && '✅ Passed' || needs.terraform_checks.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+
+          PY_PASSED="${{ needs.python_checks.outputs.all_steps_passed == 'true' }}"
+          TF_RES="${{ needs.terraform_checks.result }}"
+          TF_PASSED="${{ needs.terraform_checks.outputs.all_checks_passed == 'true' }}"
+
+          if [[ "$PY_PASSED" == "true" && "$TF_RES" == "success" && "$TF_PASSED" == "true" ]]; then
+            echo "**🎉 Overall Result: ✅ All checks passed successfully!**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**⚠️ Overall Result: ❌ Some checks failed. Please review the detailed results above.**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Failed Components:" >> $GITHUB_STEP_SUMMARY
+
+            if [[ "$PY_PASSED" != "true" ]]; then
+              echo "- Python Module Checks" >> $GITHUB_STEP_SUMMARY
+            fi
+            if [[ "$TF_RES" != "success" || "$TF_PASSED" != "true" ]]; then
+              echo "- Terraform Module Checks" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+      - name: Check Overall Status
+        if: always()
+        shell: bash
+        run: |
+          PY_PASSED="${{ needs.python_checks.outputs.all_steps_passed == 'true' }}"
+          TF_RES="${{ needs.terraform_checks.result }}"
+          TF_PASSED="${{ needs.terraform_checks.outputs.all_checks_passed == 'true' }}"
+          if [[ "$PY_PASSED" != "true" ]] || [[ "$TF_RES" != "success" || "$TF_PASSED" != "true" ]]; then
+            echo "::error::Some checks failed. See summary above for details."
+            exit 1
+          fi

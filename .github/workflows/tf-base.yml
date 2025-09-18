@@ -1,0 +1,156 @@
+name: Terraform Module Base Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      concurrency_group:
+        description: "Name of concurrency group to manage concurrent github action runs"
+        default: ${{ github.repository }}/${{ github.event.pull_request.head.ref || github.ref }}
+        required: false
+        type: string
+      runner_type:
+        description: "Type of runner (GitHub-hosted or self-hosted)"
+        required: false
+        default: "ubuntu-latest"
+        type: string
+      commit_user:
+        description: "Username which should be used for commits by github action"
+        default: "github-actions"
+        required: false
+        type: string
+      commit_email:
+        description: "Email which should be used for commits by github action"
+        default: "noreply@github.com"
+        required: false
+        type: string
+      tf_version:
+        description: "Terraform version used for formatting and docs"
+        default: "latest"
+        required: false
+        type: string
+    outputs:
+      all_checks_passed:
+        description: "Indicates if all pipeline steps passed successfully"
+        value: ${{ jobs.tf_base_terraform_format.outputs.diff_exists == 'false' && jobs.tf_base_terraform_docs.outputs.diff_exists == 'false' }}
+      format_status:
+        description: "Terraform format check status"
+        value: ${{ jobs.tf_base_terraform_format.outputs.fmt_status }}
+      docs_status:
+        description: "Terraform docs generation status"
+        value: ${{ jobs.tf_base_terraform_docs.outputs.docs_status }}
+
+jobs:
+  tf_base_terraform_format:
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      fmt_status: ${{ steps.fmt.outcome }}
+      diff_exists: ${{ steps.fmt_commit.outputs.diff }}
+
+    steps:
+      # Replace Download with Checkout
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0  # Full history for git operations
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.tf_version }}
+
+      - name: Output Terraform Version
+        run: terraform version
+
+      - name: Terraform Format
+        id: fmt
+        run: terraform fmt -recursive
+
+      - name: Commit Format Changes
+        id: fmt_commit
+        run: |
+          git config --local user.name "${{ inputs.commit_user }}"
+          git config --local user.email "${{ inputs.commit_email }}"
+          if [[ -z $(git status -s) ]]; then
+              echo "diff=false" >> $GITHUB_OUTPUT
+          else
+              echo "diff=true" >> $GITHUB_OUTPUT
+              git diff-index --quiet HEAD || git commit -m "style(terraform fmt): format code" -a
+          fi
+
+      - name: Push Format Changes
+        if: steps.fmt_commit.outputs.diff == 'true'
+        uses: ad-m/github-push-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.event.pull_request.head.ref }}
+
+  tf_base_terraform_docs:
+    needs: tf_base_terraform_format
+    if: ${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' }}
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      docs_status: ${{ steps.docs.outcome }}
+      diff_exists: ${{ steps.docs.outputs.num_changed > 0 }}
+
+    steps:
+      # Replace Download with Checkout
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # Pull any changes from terraform_format job
+      - name: Pull Latest Changes
+        run: git pull origin ${{ github.event.pull_request.head.ref || github.ref }}
+
+      - name: Check For Submodules
+        id: check_submodules
+        run: |
+          if [[ -d "./modules" ]]; then
+              echo "dir_exists=true" >> $GITHUB_OUTPUT
+          else
+              echo "dir_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Terraform Documentation
+        id: docs
+        uses: terraform-docs/gh-actions@v1.4.1
+        with:
+          working-dir: .
+          recursive: ${{ steps.check_submodules.outputs.dir_exists }}
+          recursive-path: modules
+          output-file: README.md
+          output-method: inject
+          args: --sort-by required
+          git-push: true
+          git-push-user-name: ${{ inputs.commit_user }}
+          git-push-user-email: ${{ inputs.commit_email }}
+          git-commit-message: "docs(terraform-docs): update readme"
+
+  tf_base_summary:
+    needs: [tf_base_terraform_format, tf_base_terraform_docs]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Output Summary
+        run: |
+          echo '# 📝 Terraform Module Base Pipeline' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '## Code Quality & Documentation' >> $GITHUB_STEP_SUMMARY
+          echo '| Check | Status | Result |' >> $GITHUB_STEP_SUMMARY
+          echo '|-------|--------|--------|' >> $GITHUB_STEP_SUMMARY
+          echo "| 🎨 Terraform Format | ${{ needs.tf_base_terraform_format.outputs.fmt_status }} | ${{ needs.tf_base_terraform_format.outputs.diff_exists == 'true' && '⚠️ Changes committed' || '✅ No changes needed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📚 Terraform Docs | ${{ needs.tf_base_terraform_docs.outputs.docs_status }} | ${{ needs.tf_base_terraform_docs.outputs.diff_exists == 'true' && '⚠️ Docs updated' || '✅ Docs up to date' }} |" >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+
+          OVERALL_STATUS="${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' && needs.tf_base_terraform_docs.outputs.diff_exists == 'false' }}"
+
+          if [[ "$OVERALL_STATUS" == "true" ]]; then
+            echo "**🎉 Overall Result: ✅ All checks passed**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**⚠️ Overall Result: ❌ Some checks failed or changes were made**" >> $GITHUB_STEP_SUMMARY
+          fi
