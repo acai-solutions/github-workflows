@@ -28,6 +28,7 @@ on:
         default: "registry.terraform.io"
         required: false
         type: string
+        
       terratest_config_repo:
         description: "Public repo where terratest matrix json is stored"
         default: "acai-solutions/github-workflow-configs"
