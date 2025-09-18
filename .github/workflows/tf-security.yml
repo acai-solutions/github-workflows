@@ -175,9 +175,7 @@ jobs:
           exit-code: '1'               # still fail the step if HIGH/CRITICAL found
           severity: 'CRITICAL,HIGH'
           timeout: '10m'
-          skip-dirs: |                 # avoid scanning incomplete/non-source dirs
-            examples
-            .terraform
+          skip-dirs: 'examples,.terraform'
 
       - name: Run Checkov Security Scan
         id: checkov
