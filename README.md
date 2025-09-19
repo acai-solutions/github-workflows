@@ -24,6 +24,7 @@ The reusable Github Workflows utilize the following external GitHub Actions:
 - [`actions/setup-python`](https://github.com/actions/setup-python) - Python runtime setup
 - [`actions/github-script`](https://github.com/actions/github-script) - Run JavaScript code within workflows
 - [`ad-m/github-push-action`](https://github.com/ad-m/github-push-action) - Commit and push changes back to the repository from within workflows
+- [`github/codeql-action/upload-sarif`](https://github.com/codeql-action/upload-sarif) - Upload Sarif
 
 **Terraform & Infrastructure:**
 - [`hashicorp/setup-terraform`](https://github.com/hashicorp/setup-terraform) - Terraform CLI installation
@@ -31,7 +32,8 @@ The reusable Github Workflows utilize the following external GitHub Actions:
 - [`terraform-linters/setup-tflint`](https://github.com/terraform-linters/setup-tflint) - Installs and configures TFLint for Terraform code analysis
 
 **Code Quality & Security:**
-- [`aquasecurity/trivy-action`](https://github.com/aquasecurity/trivy-action) - Standalone Trivy security scanning for vulnerabilities
+- [`reviewdog/action-trivy`](https://github.com/marketplace/actions/run-trivy-with-reviewdog) - Run trivy with reviewdog
+- [`aquasecurity/trivy-action`](https://github.com/marketplace/actions/aqua-security-trivy) - Standalone Trivy security scanning for vulnerabilities
 - [`bridgecrewio/checkov-action`](https://github.com/bridgecrewio/checkov-action) - Infrastructure as Code (IaC) static analysis and security scanning
 - [`mikepenz/action-junit-report`](https://github.com/mikepenz/action-junit-report) - Converts test results to JUnit format and publishes them as workflow artifacts
 

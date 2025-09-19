@@ -64,6 +64,10 @@ on:
 jobs:
   tf_security_checks:
     runs-on: ${{ inputs.runner_type }}
+    permissions:
+      contents: read
+      security-events: write      # needed to upload SARIF
+      pull-requests: write        # needed for reviewdog PR checks
     outputs:
       all_checks_passed: ${{ steps.determine_status.outputs.all_passed }}
       tflint_status: ${{ steps.tflint.outcome }}
@@ -163,19 +167,50 @@ jobs:
             exit 0
           fi
 
-      - name: Run Trivy Security Scan
-        id: trivy
+      # --- Trivy (for PRs: reviewdog, for pushes/schedules: SARIF) ---
+      - name: Run Trivy (PR annotations via reviewdog)
+        if: ${{ github.event_name == 'pull_request' }}
+        id: trivy_reviewdog
         continue-on-error: true
-        uses: aquasecurity/trivy-action@master
+        uses: reviewdog/action-trivy@v1.9.0
         with:
-          scan-type: 'config'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          exit-code: '1'               # still fail the step if HIGH/CRITICAL found
-          severity: 'CRITICAL,HIGH'
-          timeout: '10m'
-          skip-dirs: 'examples,.terraform'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          reporter: github-pr-check
+          fail_on_error: true
+          filter_mode: nofilter
+          level: error
+          flags: ""
+          trivy_flags: "--severity CRITICAL,HIGH --timeout 10m --skip-dirs examples,.terraform"
+          trivy_command: config
+          trivy_target: .
+          trivy_version: ${{ inputs.trivy_version }}
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.2.3
+        with:
+          version: ${{ inputs.trivy_version }}
+
+      # https://github.com/marketplace/actions/aqua-security-trivy
+      - name: Run Trivy Security Scan (SARIF)
+        if: ${{ github.event_name != 'pull_request' }}
+        id: trivy_scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.33.1   # ✅ pin to a stable release instead of @master
+        with:
+          scan-type: config
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: 1             # fail step if HIGH/CRITICAL found
+          severity: CRITICAL,HIGH
+          timeout: 10m
+          skip-dirs: examples,.terraform
+
+      - name: Upload Trivy SARIF to Code Scanning
+        if: ${{ github.event_name != 'pull_request' && always() }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
 
       - name: Run Checkov Security Scan
         id: checkov
