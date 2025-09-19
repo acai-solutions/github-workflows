@@ -66,14 +66,14 @@ jobs:
     runs-on: ${{ inputs.runner_type }}
     permissions:
       contents: read
-      security-events: write      # needed to upload SARIF
-      pull-requests: write        # needed for reviewdog PR checks
+      security-events: write
+      pull-requests: write
+      checks: write            # Added so reviewdog + junit report can create check runs
     outputs:
       all_checks_passed: ${{ steps.determine_status.outputs.all_passed }}
       tflint_status: ${{ steps.tflint.outcome }}
-      trivy_status: ${{ steps.trivy.outcome }}
+      trivy_status: ${{ steps.trivy_reviewdog.outcome || steps.trivy_scan.outcome }}   # Fixed
       checkov_status: ${{ steps.checkov.outcome }}
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
@@ -195,13 +195,13 @@ jobs:
         if: ${{ github.event_name != 'pull_request' }}
         id: trivy_scan
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.33.1   # ✅ pin to a stable release instead of @master
+        uses: aquasecurity/trivy-action@0.33.1
         with:
           scan-type: config
           scan-ref: .
           format: sarif
           output: trivy-results.sarif
-          exit-code: 1             # fail step if HIGH/CRITICAL found
+          exit-code: 1
           severity: CRITICAL,HIGH
           timeout: 10m
           skip-dirs: examples,.terraform
@@ -215,7 +215,7 @@ jobs:
       - name: Run Checkov Security Scan
         id: checkov
         continue-on-error: ${{ inputs.checkov_failures_allow }}
-        uses: bridgecrewio/checkov-action@master
+        uses: bridgecrewio/checkov-action@v12    
         with:
           directory: .
           framework: terraform
@@ -248,28 +248,22 @@ jobs:
         if: always()
         run: |
           TFLINT_RESULT="${{ steps.tflint.outcome }}"
-          TRIVY_RESULT="${{ steps.trivy.outcome }}"
+          TRIVY_RESULT="${{ steps.trivy_reviewdog.outcome || steps.trivy_scan.outcome }}"
           CHECKOV_RESULT="${{ steps.checkov.outcome }}"
-          
-          # TFLint check (only if enabled)
-          if [[ "${{ inputs.linting_include }}" == "true" ]] && [[ "$TFLINT_RESULT" != "success" ]]; then
-            echo "all_passed=false" >> $GITHUB_OUTPUT
+
+          if [[ "${{ inputs.linting_include }}" == "true" && "$TFLINT_RESULT" != "success" ]]; then
+            echo "all_passed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          
-          # Trivy check
           if [[ "$TRIVY_RESULT" != "success" ]]; then
-            echo "all_passed=false" >> $GITHUB_OUTPUT
+            echo "all_passed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          
-          # Checkov check (unless failures are allowed)
-          if [[ "${{ inputs.checkov_failures_allow }}" == "false" ]] && [[ "$CHECKOV_RESULT" != "success" ]]; then
-            echo "all_passed=false" >> $GITHUB_OUTPUT
+          if [[ "${{ inputs.checkov_failures_allow }}" == "false" && "$CHECKOV_RESULT" != "success" ]]; then
+            echo "all_passed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          
-          echo "all_passed=true" >> $GITHUB_OUTPUT
+          echo "all_passed=true" >> "$GITHUB_OUTPUT"
 
   tf_security_checks_summary:
     needs: tf_security_checks
