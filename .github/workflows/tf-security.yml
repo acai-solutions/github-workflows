@@ -172,7 +172,7 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         id: trivy_reviewdog
         continue-on-error: true
-        uses: reviewdog/action-trivy@v1.9.0
+        uses: reviewdog/action-trivy@v1.14.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           reporter: github-pr-check
