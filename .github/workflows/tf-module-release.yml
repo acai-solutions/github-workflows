@@ -15,7 +15,7 @@ on:
         type: string
       skip_version_injection_folder_prefix:
         description: 'Comma-separated list of folder prefixes to exclude from version injection'
-        default: ''
+        default: '99-,terraform-aws-'
         required: false
         type: string
       toggle_branch_protection:

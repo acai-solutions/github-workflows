@@ -2,7 +2,7 @@
 
 <!-- LOGO -->
 <a href="https://acai.gmbh">    
-  <img src="https://github.com/acai-consulting/acai.public/raw/main/logo/logo_github_readme.png" alt="acai logo" title="ACAI" align="right" height="75" />
+  <img src="https://github.com/acai-solutions/acai.public/raw/main/logo/logo_github_readme.png" alt="acai logo" title="ACAI" align="right" height="75" />
 </a>
 
 <!-- SHIELDS -->
