@@ -216,6 +216,11 @@ jobs:
         id: checkov
         continue-on-error: ${{ inputs.checkov_failures_allow }}
         uses: bridgecrewio/checkov-action@v12    
+        env:
+          # Force Checkov to treat the current branch as both FROM and TO to avoid "main" annotations
+          BC_FROM_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          BC_TO_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          BC_COMMIT_HASH: ${{ github.sha }}
         with:
           directory: .
           framework: terraform
