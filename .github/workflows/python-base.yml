@@ -175,7 +175,7 @@ jobs:
         if: steps.isort.outputs.needs_sort == 'true'
         run: |
           echo "Applying import sorting..."
-          isort .
+          isort . --profile black
           echo "✅ Import sorting applied"
 
       - name: Commit and Push Changes
