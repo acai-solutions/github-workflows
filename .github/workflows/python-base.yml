@@ -231,15 +231,24 @@ jobs:
       - name: Get Flake8 Config from Central Repo
         id: get_config
         run: |
+          # If the repository already contains a local .flake8, prefer it
+          if [[ -f ".flake8" ]]; then
+            echo "Found local .flake8 in repository. Using local Flake8 configuration."
+            echo "config_source=local" >> $GITHUB_OUTPUT
+            echo "Content preview:"
+            head -20 .flake8 || true
+            exit 0
+          fi
+
           echo "Fetching Flake8 config from: ${{ inputs.gh_wf_config_repo }}/${{ inputs.python_config_path }}/.flake8@${{ inputs.gh_wf_config_repo_ref }}"
-          
-          # Try to download the config file
+
+          # Try to download the central config file only if no local config was found
           HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github.v3.raw" \
             "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.python_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
-          
+
           HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n 1)
           CONTENT=$(echo "$HTTP_RESPONSE" | head -n -1)
-          
+
           if [[ "$HTTP_CODE" == "200" ]]; then
             echo "$CONTENT" > .flake8
             echo "✅ Successfully downloaded Flake8 config from central repo"
@@ -261,12 +270,19 @@ jobs:
         run: |
           echo "Running Flake8 linting checks..."
           echo "Config source: ${{ steps.get_config.outputs.config_source }}"
-          
+
+          # Decide how to pass the configuration to flake8
+          CFG_OPT=""
+          if [[ "${{ steps.get_config.outputs.config_source }}" == "local" || "${{ steps.get_config.outputs.config_source }}" == "remote" ]]; then
+            # Be explicit about the config file when we know it's present
+            CFG_OPT="--config .flake8"
+          fi
+
           # Run flake8 for JSON report (ignore exit code for now)
-          flake8 . --format=json --output-file=flake8-report.json || true
-          
+          flake8 . $CFG_OPT --format=json --output-file=flake8-report.json || true
+
           # Run flake8 with standard output and capture exit code
-          if flake8 . --statistics --count; then
+          if flake8 . $CFG_OPT --statistics --count; then
             echo "✅ Flake8 check passed - no issues found"
             exit 0
           else
