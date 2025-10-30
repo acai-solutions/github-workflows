@@ -64,6 +64,11 @@ on:
         default: latest
         required: false
         type: string
+      tf_docs_skip:
+        description: "Skip Terraform docs generation"
+        required: false
+        default: false
+        type: boolean
       tf_lint_config_path:
         description: Path to tflint config in gh_wf_config_repo (e.g. "aws/.tflint.hcl")
         default: .tflint.hcl
@@ -179,6 +184,7 @@ jobs:
       linting_allow_failures: ${{ inputs.linting_allow_failures }}
       python_version: ${{ inputs.python_version }}
       tf_version: ${{ inputs.tf_version }}
+      tf_docs_skip: ${{ inputs.tf_docs_skip }}
       tf_lint_config_path: ${{ inputs.tf_lint_config_path }}
       tf_lint_version: ${{ inputs.tf_lint_version }}
       tf_trivy_version: ${{ inputs.tf_trivy_version }}

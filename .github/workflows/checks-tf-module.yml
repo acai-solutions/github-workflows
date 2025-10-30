@@ -61,6 +61,11 @@ on:
         default: latest
         required: false
         type: string
+      tf_docs_skip:
+        description: "Skip Terraform docs generation"
+        required: false
+        default: false
+        type: boolean
       tf_lint_config_path:
         description: Path to tflint config in gh_wf_config_repo (e.g. "aws/.tflint.hcl")
         default: .tflint.hcl
@@ -148,6 +153,7 @@ jobs:
       commit_user: ${{ inputs.commit_user }}
       commit_email: ${{ inputs.commit_email }}
       tf_version: ${{ inputs.tf_version }}
+      tf_docs_skip: ${{ inputs.tf_docs_skip }}
 
   terraform_security:
     needs:

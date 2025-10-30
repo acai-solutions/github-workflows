@@ -28,18 +28,27 @@ on:
         default: "latest"
         required: false
         type: string
+      skip_tf_docs:
+        description: "Skip Terraform docs generation"
+        required: false
+        default: false
+        type: boolean
+
     outputs:
       all_checks_passed:
         description: "Indicates if all pipeline steps passed successfully"
-        value: ${{ jobs.tf_base_terraform_format.outputs.diff_exists == 'false' && jobs.tf_base_terraform_docs.outputs.diff_exists == 'false' }}
+        value: ${{ jobs.tf_base_terraform_format.outputs.diff_exists == 'false' && (inputs.skip_tf_docs == 'true' || jobs.tf_base_terraform_docs.outputs.diff_exists == 'false') }}
+
       format_status:
         description: "Terraform format check status"
         value: ${{ jobs.tf_base_terraform_format.outputs.fmt_status }}
+
       docs_status:
         description: "Terraform docs generation status"
-        value: ${{ jobs.tf_base_terraform_docs.outputs.docs_status }}
+        value: ${{ inputs.skip_tf_docs == 'true' && 'skipped' || jobs.tf_base_terraform_docs.outputs.docs_status }}
 
 jobs:
+
   tf_base_terraform_format:
     runs-on: ${{ inputs.runner_type }}
     outputs:
@@ -47,13 +56,12 @@ jobs:
       diff_exists: ${{ steps.fmt_commit.outputs.diff }}
 
     steps:
-      # Replace Download with Checkout
       - name: Checkout Repository
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.ref || github.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0  # Full history for git operations
+          fetch-depth: 0
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -88,14 +96,13 @@ jobs:
 
   tf_base_terraform_docs:
     needs: tf_base_terraform_format
-    if: ${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' }}
+    if: ${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' && inputs.skip_tf_docs != 'true' }}
     runs-on: ${{ inputs.runner_type }}
     outputs:
       docs_status: ${{ steps.docs.outcome }}
       diff_exists: ${{ steps.docs.outputs.num_changed > 0 }}
 
     steps:
-      # Replace Download with Checkout
       - name: Checkout Repository
         uses: actions/checkout@v5
         with:
@@ -103,7 +110,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # Pull any changes from terraform_format job
       - name: Pull Latest Changes
         run: git pull origin ${{ github.event.pull_request.head.ref || github.ref }}
 
@@ -135,6 +141,7 @@ jobs:
     needs: [tf_base_terraform_format, tf_base_terraform_docs]
     runs-on: ubuntu-latest
     if: always()
+
     steps:
       - name: Output Summary
         run: |
@@ -143,12 +150,22 @@ jobs:
           echo '## Code Quality & Documentation' >> $GITHUB_STEP_SUMMARY
           echo '| Check | Status | Result |' >> $GITHUB_STEP_SUMMARY
           echo '|-------|--------|--------|' >> $GITHUB_STEP_SUMMARY
+
           echo "| 🎨 Terraform Format | ${{ needs.tf_base_terraform_format.outputs.fmt_status }} | ${{ needs.tf_base_terraform_format.outputs.diff_exists == 'true' && '⚠️ Changes committed' || '✅ No changes needed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📚 Terraform Docs | ${{ needs.tf_base_terraform_docs.outputs.docs_status }} | ${{ needs.tf_base_terraform_docs.outputs.diff_exists == 'true' && '⚠️ Docs updated' || '✅ Docs up to date' }} |" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ inputs.skip_tf_docs }}" == "true" ]]; then
+            echo "| 📚 Terraform Docs | ⏭️ Skipped | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 📚 Terraform Docs | ${{ needs.tf_base_terraform_docs.outputs.docs_status }} | ${{ needs.tf_base_terraform_docs.outputs.diff_exists == 'true' && '⚠️ Docs updated' || '✅ Docs up to date' }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ inputs.skip_tf_docs }}" == "true" ]]; then
+            OVERALL_STATUS="${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' }}"
+          else
+            OVERALL_STATUS="${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' && needs.tf_base_terraform_docs.outputs.diff_exists == 'false' }}"
+          fi
+
           echo '' >> $GITHUB_STEP_SUMMARY
-
-          OVERALL_STATUS="${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' && needs.tf_base_terraform_docs.outputs.diff_exists == 'false' }}"
-
           if [[ "$OVERALL_STATUS" == "true" ]]; then
             echo "**🎉 Overall Result: ✅ All checks passed**" >> $GITHUB_STEP_SUMMARY
           else
