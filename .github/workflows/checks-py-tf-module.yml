@@ -165,7 +165,6 @@ jobs:
       linting_allow_failures: ${{ inputs.linting_allow_failures }}
       python_version: ${{ inputs.python_version }}
       python_lint_config_path: ${{ inputs.python_lint_config_path }}
-    secrets: inherit
 
   # 2) Then run Terraform checks (only if Python passed)
   terraform_checks:
@@ -193,7 +192,13 @@ jobs:
       terratest_config_repo_path: ${{ inputs.terratest_config_repo_path }}
       terratest_path: ${{ inputs.terratest_path }}
       terratest_examples_path: ${{ inputs.terratest_examples_path }}
-    secrets: inherit
+    secrets: 
+      GH_REPO_READ_APP_ID: ${{ secrets.GH_REPO_READ_APP_ID }}
+      GH_REPO_READ_APP_PRIVATE_KEY: ${{ secrets.GH_REPO_READ_APP_PRIVATE_KEY }}
+      TFC_API_TOKEN: ${{ secrets.TFC_API_TOKEN }}
+      AWS_TESTBED_ACCESS_KEY_ID: ${{ secrets.AWS_TESTBED_ACCESS_KEY_ID }}
+      AWS_TESTBED_SECRET_ACCESS_KEY: ${{ secrets.AWS_TESTBED_SECRET_ACCESS_KEY }}
+      AWS_TESTBED_DEFAULT_REGION: ${{ secrets.AWS_TESTBED_DEFAULT_REGION }}
 
   tf_py_checks_summary:
     needs:
