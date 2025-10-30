@@ -116,7 +116,7 @@ on:
         required: true
       AWS_TESTBED_DEFAULT_REGION:
         required: true
-        
+
     outputs:
       all_checks_passed:
         description: Indicates if all pipeline steps passed successfully
@@ -148,7 +148,6 @@ jobs:
       commit_user: ${{ inputs.commit_user }}
       commit_email: ${{ inputs.commit_email }}
       tf_version: ${{ inputs.tf_version }}
-    secrets: inherit
 
   terraform_security:
     needs:
@@ -166,7 +165,6 @@ jobs:
       tf_lint_version: ${{ inputs.tf_lint_version }}
       trivy_version: ${{ inputs.tf_trivy_version }}
       checkov_failures_allow: ${{ inputs.tf_checkov_failures_allow }}
-    secrets: inherit
        
   terraform_module_test:
     needs:
@@ -179,8 +177,14 @@ jobs:
       terratest_config_repo_path: ${{ inputs.terratest_config_repo_path }}
       terratest_path : ${{ inputs.terratest_path }}
       terratest_examples_path: ${{ inputs.terratest_examples_path }}
-    secrets: inherit
-
+    secrets: 
+      GH_REPO_READ_APP_ID: ${{ secrets.GH_REPO_READ_APP_ID }}
+      GH_REPO_READ_APP_PRIVATE_KEY: ${{ secrets.GH_REPO_READ_APP_PRIVATE_KEY }}
+      TFC_API_TOKEN: ${{ secrets.TFC_API_TOKEN }}
+      AWS_TESTBED_ACCESS_KEY_ID: ${{ secrets.AWS_TESTBED_ACCESS_KEY_ID }}
+      AWS_TESTBED_SECRET_ACCESS_KEY: ${{ secrets.AWS_TESTBED_SECRET_ACCESS_KEY }}
+      AWS_TESTBED_DEFAULT_REGION: ${{ secrets.AWS_TESTBED_DEFAULT_REGION }}
+      
   tf_module_checks_summary:
     needs:
       - terraform_base
