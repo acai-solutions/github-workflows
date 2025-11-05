@@ -91,7 +91,7 @@ on:
         type: boolean
 
       # Test inputs
-      run_tests:
+      terratest_run_tests:
         description: Whether to run Terraform (Terratest) tests
         required: false
         default: true
@@ -188,7 +188,7 @@ jobs:
       tf_lint_version: ${{ inputs.tf_lint_version }}
       tf_trivy_version: ${{ inputs.tf_trivy_version }}
       tf_checkov_failures_allow: ${{ inputs.tf_checkov_failures_allow }}
-      run_tests: ${{ inputs.run_tests }}
+      terratest_run_tests: ${{ inputs.terratest_run_tests }}
       terratest_config_repo_path: ${{ inputs.terratest_config_repo_path }}
       terratest_path: ${{ inputs.terratest_path }}
       terratest_examples_path: ${{ inputs.terratest_examples_path }}

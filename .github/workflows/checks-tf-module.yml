@@ -88,7 +88,7 @@ on:
         type: boolean
 
       # Test inputs
-      run_tests:
+      terratest_run_tests:
         description: Whether to run Terraform (Terratest) tests
         required: false
         default: true
@@ -127,7 +127,7 @@ on:
         description: Indicates if all pipeline steps passed successfully
         value: ${{ jobs.terraform_base.outputs.all_checks_passed == 'true' &&
           jobs.terraform_security.outputs.all_checks_passed == 'true' &&
-          (inputs.run_tests != true || jobs.terraform_module_test.outputs.all_checks_passed == 'true') }}
+          (inputs.terratest_run_tests != true || jobs.terraform_module_test.outputs.all_checks_passed == 'true') }}
       terraform_base_status:
         description: Terraform base pipeline status
         value: ${{ jobs.terraform_base.outputs.all_checks_passed }}
@@ -176,7 +176,7 @@ jobs:
     needs:
       - terraform_security
     uses: acai-solutions/github-workflows/.github/workflows/tf-module-test.yml@main
-    if: ${{ inputs.run_tests && needs.terraform_security.outputs.all_checks_passed == 'true' }}
+    if: ${{ inputs.terratest_run_tests && needs.terraform_security.outputs.all_checks_passed == 'true' }}
     with:
       terratest_config_repo: ${{ inputs.gh_wf_config_repo }}
       terratest_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
@@ -210,14 +210,14 @@ jobs:
           echo "| 📝 Terraform Base (Format & Docs) | ${{ needs.terraform_base.outputs.all_checks_passed == 'true' && '✅ Passed' || needs.terraform_base.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 🔒 Terraform Security Checks | ${{ needs.terraform_security.outputs.all_checks_passed == 'true' && '✅ Passed' || needs.terraform_security.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           
-          if [[ "${{ inputs.run_tests }}" == "true" ]]; then
+          if [[ "${{ inputs.terratest_run_tests }}" == "true" ]]; then
             echo "| 🧪 Terraform Tests | ${{ needs.terraform_module_test.outputs.all_checks_passed == 'true' && '✅ Passed' || needs.terraform_module_test.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           fi
           echo '' >> $GITHUB_STEP_SUMMARY
 
           TF_BASE_PASSED="${{ needs.terraform_base.outputs.all_checks_passed == 'true' }}"
           TF_SECURITY_PASSED="${{ needs.terraform_security.outputs.all_checks_passed == 'true' }}"
-          TF_TESTS_PASSED="${{ inputs.run_tests != true || needs.terraform_module_test.outputs.all_checks_passed == 'true' }}"
+          TF_TESTS_PASSED="${{ inputs.terratest_run_tests != true || needs.terraform_module_test.outputs.all_checks_passed == 'true' }}"
 
           if [[ "$TF_BASE_PASSED" == "true" && "$TF_SECURITY_PASSED" == "true" && "$TF_TESTS_PASSED" == "true" ]]; then
             echo "**🎉 Overall Result: ✅ All checks passed successfully!**" >> $GITHUB_STEP_SUMMARY
@@ -232,7 +232,7 @@ jobs:
             if [[ "$TF_SECURITY_PASSED" != "true" ]]; then
               echo "- Security Checks" >> $GITHUB_STEP_SUMMARY
             fi
-            if [[ "${{ inputs.run_tests }}" == "true" && "$TF_TESTS_PASSED" != "true" ]]; then
+            if [[ "${{ inputs.terratest_run_tests }}" == "true" && "$TF_TESTS_PASSED" != "true" ]]; then
               echo "- Terraform Tests" >> $GITHUB_STEP_SUMMARY
             fi
           fi
@@ -242,7 +242,7 @@ jobs:
         run: |
           TF_BASE_PASSED="${{ needs.terraform_base.outputs.all_checks_passed == 'true' }}"
           TF_SECURITY_PASSED="${{ needs.terraform_security.outputs.all_checks_passed == 'true' }}"
-          TF_TESTS_PASSED="${{ inputs.run_tests != true || needs.terraform_module_test.outputs.all_checks_passed == 'true' }}"
+          TF_TESTS_PASSED="${{ inputs.terratest_run_tests != true || needs.terraform_module_test.outputs.all_checks_passed == 'true' }}"
           
           if [[ "$TF_BASE_PASSED" != "true" ]] || \
              [[ "$TF_SECURITY_PASSED" != "true" ]] || \
