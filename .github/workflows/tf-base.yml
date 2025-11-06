@@ -37,7 +37,7 @@ on:
     outputs:
       all_checks_passed:
         description: "Indicates if all pipeline steps passed successfully"
-        value: ${{ jobs.tf_base_terraform_format.outputs.diff_exists == 'false' && (inputs.tf_docs_skip == 'true' || jobs.tf_base_terraform_docs.outputs.diff_exists == 'false') }}
+        value: ${{ jobs.tf_base_terraform_format.outputs.diff_exists == 'false' && (inputs.tf_docs_skip == true || jobs.tf_base_terraform_docs.outputs.diff_exists == 'false') }}
 
       format_status:
         description: "Terraform format check status"
@@ -45,7 +45,7 @@ on:
 
       docs_status:
         description: "Terraform docs generation status"
-        value: ${{ inputs.tf_docs_skip == 'true' && 'skipped' || jobs.tf_base_terraform_docs.outputs.docs_status }}
+        value: ${{ inputs.tf_docs_skip == true && 'skipped' || jobs.tf_base_terraform_docs.outputs.docs_status }}
 
 jobs:
 
@@ -96,7 +96,7 @@ jobs:
 
   tf_base_terraform_docs:
     needs: tf_base_terraform_format
-    if: ${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' && inputs.tf_docs_skip != 'true' }}
+    if: ${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' && inputs.tf_docs_skip != true }}
     runs-on: ${{ inputs.runner_type }}
     outputs:
       docs_status: ${{ steps.docs.outcome }}
