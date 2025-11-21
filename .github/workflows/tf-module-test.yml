@@ -145,7 +145,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.21'
+          go-version: '1.24'
           cache-dependency-path: ${{ inputs.terratest_path }}/go.sum
 
       - name: Verify Repository Structure
@@ -180,7 +180,7 @@ jobs:
       - name: Get Dependencies
         working-directory: ${{ inputs.terratest_path }}
         run: |
-          go get -v -t -d 
+          go mod download
           wget https://github.com/gruntwork-io/terratest/releases/download/v0.40.8/terratest_log_parser_linux_amd64
           chmod +x terratest_log_parser_linux_amd64
 
