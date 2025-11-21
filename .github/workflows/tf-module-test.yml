@@ -146,7 +146,6 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.24'
-          cache-dependency-path: ${{ inputs.terratest_path }}/go.sum
 
       - name: Verify Repository Structure
         run: |
@@ -180,7 +179,10 @@ jobs:
       - name: Get Dependencies
         working-directory: ${{ inputs.terratest_path }}
         run: |
-          go mod download
+          go mod init test/terratest || true
+          go get github.com/gruntwork-io/terratest/modules/terraform@v0.40.8
+          go get github.com/stretchr/testify/assert@latest
+          go mod tidy
           wget https://github.com/gruntwork-io/terratest/releases/download/v0.40.8/terratest_log_parser_linux_amd64
           chmod +x terratest_log_parser_linux_amd64
 
