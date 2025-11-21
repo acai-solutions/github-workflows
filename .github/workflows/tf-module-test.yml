@@ -64,6 +64,8 @@ on:
         required: true
       GH_REPO_READ_APP_PRIVATE_KEY:
         required: true
+      GITHUB_TOKEN:
+        required: true
       TFC_API_TOKEN:
         required: true
       AWS_TESTBED_ACCESS_KEY_ID:
@@ -173,31 +175,37 @@ jobs:
           echo "✅ Go dependencies updated and verified successfully" >> $GITHUB_STEP_SUMMARY
 
       - name: Check for Go Dependency Changes
+        id: go_changes
         working-directory: ${{ inputs.terratest_path }}
         run: |
           if git diff --quiet go.mod go.sum; then
             echo "✅ No dependency changes detected" >> $GITHUB_STEP_SUMMARY
+            echo "has_changes=false" >> $GITHUB_OUTPUT
           else
             echo "### Go Dependency Changes Detected 🔄" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo '```diff' >> $GITHUB_STEP_SUMMARY
             git diff go.mod go.sum >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Commit and Push Go Dependency Updates
+      - name: Commit Go Dependency Updates
+        if: steps.go_changes.outputs.has_changes == 'true'
         working-directory: ${{ inputs.terratest_path }}
         run: |
-          if ! git diff --quiet go.mod go.sum; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add go.mod go.sum
-            git commit -m "chore: update Go dependencies [skip ci]"
-            git push
-            echo "✅ Go dependency updates committed and pushed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "ℹ️ No changes to commit" >> $GITHUB_STEP_SUMMARY
-          fi
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git add go.mod go.sum
+          git commit -m "chore: update Go dependencies [skip ci]"
+          echo "✅ Go dependency updates committed" >> $GITHUB_STEP_SUMMARY
+
+      - name: Push Go Dependency Updates
+        if: steps.go_changes.outputs.has_changes == 'true'
+        uses: ad-m/github-push-action@v1.0.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.event.pull_request.head.ref || github.ref_name }}
 
       - name: Verify Repository Structure
         run: |
