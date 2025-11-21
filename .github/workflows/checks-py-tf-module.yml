@@ -116,8 +116,6 @@ on:
         required: true
       GH_REPO_READ_APP_PRIVATE_KEY:
         required: true
-      GITHUB_TOKEN:
-        required: true
       TFC_API_TOKEN:
         required: true
       AWS_TESTBED_ACCESS_KEY_ID:

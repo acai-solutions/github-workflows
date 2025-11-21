@@ -53,9 +53,6 @@ on:
         default: python
         required: false
         type: string
-    secrets:
-      GITHUB_TOKEN:
-        required: true
         
     outputs:
       all_steps_passed:
