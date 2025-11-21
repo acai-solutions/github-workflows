@@ -148,63 +148,6 @@ jobs:
           go-version: '1.21'
           cache-dependency-path: ${{ inputs.terratest_path }}/go.sum
 
-      - name: Update Go Dependencies
-        working-directory: ${{ inputs.terratest_path }}
-        run: |
-          echo "### Go Dependencies Update 📦" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Update all dependencies
-          echo "Updating all Go dependencies..."
-          go get -u ./...
-          
-          # Tidy up go.mod and go.sum
-          echo "Tidying go.mod and go.sum..."
-          go mod tidy
-          
-          # Verify dependencies
-          echo "Verifying dependencies..."
-          go mod verify
-          
-          # Download dependencies
-          echo "Downloading dependencies..."
-          go mod download
-          
-          echo "✅ Go dependencies updated and verified successfully" >> $GITHUB_STEP_SUMMARY
-
-      - name: Check for Go Dependency Changes
-        id: go_changes
-        working-directory: ${{ inputs.terratest_path }}
-        run: |
-          if git diff --quiet go.mod go.sum; then
-            echo "✅ No dependency changes detected" >> $GITHUB_STEP_SUMMARY
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-          else
-            echo "### Go Dependency Changes Detected 🔄" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo '```diff' >> $GITHUB_STEP_SUMMARY
-            git diff go.mod go.sum >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Commit Go Dependency Updates
-        if: steps.go_changes.outputs.has_changes == 'true'
-        working-directory: ${{ inputs.terratest_path }}
-        run: |
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git add go.mod go.sum
-          git commit -m "chore: update Go dependencies [skip ci]"
-          echo "✅ Go dependency updates committed" >> $GITHUB_STEP_SUMMARY
-
-      - name: Push Go Dependency Updates
-        if: steps.go_changes.outputs.has_changes == 'true'
-        uses: ad-m/github-push-action@v1.0.0
-        with:
-          github_token: ${{ github.token }}
-          branch: ${{ github.event.pull_request.head.ref || github.ref_name }}
-
       - name: Verify Repository Structure
         run: |
           echo "Repository structure:"
@@ -237,8 +180,8 @@ jobs:
       - name: Get Dependencies
         working-directory: ${{ inputs.terratest_path }}
         run: |
-          go get -v -t -d
-          wget https://github.com/gruntwork-io/terratest/releases/download/v0.40.6/terratest_log_parser_linux_amd64
+          go get -v -t -d 
+          wget https://github.com/gruntwork-io/terratest/releases/download/v0.40.8/terratest_log_parser_linux_amd64
           chmod +x terratest_log_parser_linux_amd64
 
       - name: Setup Terraform
