@@ -195,7 +195,6 @@ jobs:
     secrets: 
       GH_REPO_READ_APP_ID: ${{ secrets.GH_REPO_READ_APP_ID }}
       GH_REPO_READ_APP_PRIVATE_KEY: ${{ secrets.GH_REPO_READ_APP_PRIVATE_KEY }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TFC_API_TOKEN: ${{ secrets.TFC_API_TOKEN }}
       AWS_TESTBED_ACCESS_KEY_ID: ${{ secrets.AWS_TESTBED_ACCESS_KEY_ID }}
       AWS_TESTBED_SECRET_ACCESS_KEY: ${{ secrets.AWS_TESTBED_SECRET_ACCESS_KEY }}

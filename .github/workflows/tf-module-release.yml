@@ -122,7 +122,7 @@ jobs:
           npm ci && \
           npx semantic-release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           SKIP_VERSION_INJECTION_FOLDER_PREFIX: ${{ inputs.skip_version_injection_folder_prefix }}
 
       - name: Enable Branch Protection

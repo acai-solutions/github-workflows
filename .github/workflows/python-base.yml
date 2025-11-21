@@ -79,7 +79,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.ref || github.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -129,7 +129,7 @@ jobs:
         if: steps.black_commit.outputs.diff == 'true'
         uses: ad-m/github-push-action@v1.0.0
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ github.token }}
           branch: ${{ github.event.pull_request.head.ref || github.ref_name }}
 
   python_isort:
@@ -144,7 +144,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.ref || github.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}
           fetch-depth: 0
 
       # Pull any changes from black job
@@ -198,7 +198,7 @@ jobs:
         if: steps.isort_commit.outputs.diff == 'true'
         uses: ad-m/github-push-action@v1.0.0
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ github.token }}
           branch: ${{ github.event.pull_request.head.ref || github.ref_name }}
 
   python_flake8:
@@ -213,7 +213,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.ref || github.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}
           fetch-depth: 0
 
       # Pull any changes from previous jobs
@@ -313,7 +313,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.ref || github.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}
           fetch-depth: 0
 
       # Pull any changes from previous jobs
