@@ -148,6 +148,57 @@ jobs:
           go-version: '1.21'
           cache-dependency-path: ${{ inputs.terratest_path }}/go.sum
 
+      - name: Update Go Dependencies
+        working-directory: ${{ inputs.terratest_path }}
+        run: |
+          echo "### Go Dependencies Update 📦" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Update all dependencies
+          echo "Updating all Go dependencies..."
+          go get -u ./...
+          
+          # Tidy up go.mod and go.sum
+          echo "Tidying go.mod and go.sum..."
+          go mod tidy
+          
+          # Verify dependencies
+          echo "Verifying dependencies..."
+          go mod verify
+          
+          # Download dependencies
+          echo "Downloading dependencies..."
+          go mod download
+          
+          echo "✅ Go dependencies updated and verified successfully" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check for Go Dependency Changes
+        working-directory: ${{ inputs.terratest_path }}
+        run: |
+          if git diff --quiet go.mod go.sum; then
+            echo "✅ No dependency changes detected" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Go Dependency Changes Detected 🔄" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```diff' >> $GITHUB_STEP_SUMMARY
+            git diff go.mod go.sum >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Commit and Push Go Dependency Updates
+        working-directory: ${{ inputs.terratest_path }}
+        run: |
+          if ! git diff --quiet go.mod go.sum; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add go.mod go.sum
+            git commit -m "chore: update Go dependencies [skip ci]"
+            git push
+            echo "✅ Go dependency updates committed and pushed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ No changes to commit" >> $GITHUB_STEP_SUMMARY
+          fi
+
       - name: Verify Repository Structure
         run: |
           echo "Repository structure:"
