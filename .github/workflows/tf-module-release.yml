@@ -135,10 +135,10 @@ jobs:
         run: |
           # Transform GET response to PUT request format
           jq '{
-            required_status_checks: .required_status_checks,
+            required_status_checks: (if .required_status_checks then {strict: .required_status_checks.strict, checks: .required_status_checks.checks} else null end),
             enforce_admins: .enforce_admins.enabled,
-            required_pull_request_reviews: .required_pull_request_reviews,
-            restrictions: .restrictions,
+            required_pull_request_reviews: (if .required_pull_request_reviews then .required_pull_request_reviews | del(.url) else null end),
+            restrictions: (if .restrictions then .restrictions | del(.url, .users_url, .teams_url, .apps_url) else null end),
             required_linear_history: .required_linear_history.enabled,
             allow_force_pushes: .allow_force_pushes.enabled,
             allow_deletions: .allow_deletions.enabled,
