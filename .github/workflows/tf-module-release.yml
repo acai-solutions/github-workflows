@@ -86,10 +86,19 @@ jobs:
         id: disable_branch_protection
         run: |
           gh api -X PUT /repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection \
-            -f required_status_checks=null \
-            -F enforce_admins=false \
-            -f required_pull_request_reviews=null \
-            -f restrictions=null
+            --input - <<'EOF'
+          {
+            "required_status_checks": null,
+            "enforce_admins": false,
+            "required_pull_request_reviews": null,
+            "restrictions": null,
+            "required_linear_history": false,
+            "allow_force_pushes": false,
+            "allow_deletions": false,
+            "block_creations": false,
+            "required_conversation_resolution": false
+          }
+          EOF
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
@@ -124,8 +133,21 @@ jobs:
         if: ${{ always() && inputs.toggle_branch_protection && steps.get_branch_protection.outputs.status == '200' }}
         id: enable_branch_protection
         run: |
+          # Transform GET response to PUT request format
+          jq '{
+            required_status_checks: .required_status_checks,
+            enforce_admins: .enforce_admins.enabled,
+            required_pull_request_reviews: .required_pull_request_reviews,
+            restrictions: .restrictions,
+            required_linear_history: .required_linear_history.enabled,
+            allow_force_pushes: .allow_force_pushes.enabled,
+            allow_deletions: .allow_deletions.enabled,
+            block_creations: .block_creations.enabled,
+            required_conversation_resolution: .required_conversation_resolution.enabled
+          }' branch_protection.json > branch_protection_put.json
+          
           gh api -X PUT /repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection \
-            --input branch_protection.json
+            --input branch_protection_put.json
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
