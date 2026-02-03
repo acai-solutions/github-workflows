@@ -73,30 +73,25 @@ jobs:
 
       - name: Check Branch Protection
         if: ${{ inputs.toggle_branch_protection }}
-        uses: octokit/request-action@v2.x
         id: get_branch_protection
         continue-on-error: true
-        with:
-          route: GET /repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection
+        run: |
+          gh api /repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection > branch_protection.json
+          echo "status=200" >> $GITHUB_OUTPUT
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
       
       - name: Temporarily Disable Branch Protection
         if: ${{ inputs.toggle_branch_protection && steps.get_branch_protection.outputs.status == '200' }}
-        uses: octokit/request-action@v2.x
         id: disable_branch_protection
-        with:
-          route: PUT /repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection
-          required_status_checks: |
-            null
-          enforce_admins: |
-            false
-          required_pull_request_reviews: |
-            null
-          restrictions: |
-            null
+        run: |
+          gh api -X PUT /repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection \
+            -f required_status_checks=null \
+            -F enforce_admins=false \
+            -f required_pull_request_reviews=null \
+            -f restrictions=null
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Get Semantic Release Config
         uses: actions/checkout@v5
@@ -122,38 +117,17 @@ jobs:
           npm ci && \
           npx semantic-release
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           SKIP_VERSION_INJECTION_FOLDER_PREFIX: ${{ inputs.skip_version_injection_folder_prefix }}
 
       - name: Enable Branch Protection
         if: ${{ always() && inputs.toggle_branch_protection && steps.get_branch_protection.outputs.status == '200' }}
-        uses: octokit/request-action@v2.x
         id: enable_branch_protection
-        with:
-          route: PUT /repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection
-          required_status_checks: |
-            {
-              "strict": ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).required_status_checks.strict) || null }},
-              "checks": ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).required_status_checks.checks) || null }}
-            }
-          enforce_admins: |
-            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).enforce_admins.enabled) || null }}
-          required_pull_request_reviews: |
-            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).required_pull_request_reviews) || null }}
-          restrictions: |
-            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).restrictions) || null }}
-          required_linear_history: |
-            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).required_linear_history.enabled) || null }}
-          allow_force_pushes: |
-            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).allow_force_pushes.enabled) || null }}
-          allow_deletions: |
-            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).allow_deletions.enabled) || null }}
-          block_creations: |
-            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).block_creations.enabled) || null }}
-          required_conversation_resolution: |
-            ${{ toJson(fromJson(steps.get_branch_protection.outputs.data).required_conversation_resolution.enabled) || null }}
+        run: |
+          gh api -X PUT /repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection \
+            --input branch_protection.json
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Workflow Summary
         if: ${{ always() }}
