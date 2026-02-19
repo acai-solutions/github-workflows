@@ -59,6 +59,11 @@ on:
         default: 1
         required: false
         type: number
+      test_beds:
+        description: "List of test beds to run tests against (JSON array of cloud provider prefixes, e.g. [\"AWS\"])"
+        default: '["AWS"]'
+        required: false
+        type: string
     secrets:
       GH_REPO_READ_APP_ID:
         required: true
@@ -72,6 +77,10 @@ on:
         required: true
       AWS_TESTBED_DEFAULT_REGION:
         required: true
+      AWS_TESTBED_TFVARS:
+        required: false
+      AWS_ESC_TESTBED_TFVARS:
+        required: false
     outputs: 
       all_checks_passed: 
         description: "all_steps_passed"
@@ -106,8 +115,15 @@ jobs:
         if: ${{ inputs.terratest_config_repo_path != '' }}
         id: set_matrix
         run: |
-          JSON=$(cat terraform/terratest/${{ inputs.terratest_config_repo_path }} | jq -c .)
-          echo "matrix=$JSON" >> $GITHUB_OUTPUT
+          TERRAFORM_JSON=$(cat terraform/terratest/${{ inputs.terratest_config_repo_path }} | jq -c .)
+          TEST_BEDS='${{ inputs.test_beds }}'
+          COMBINED=$(jq -n \
+            --argjson tf "$TERRAFORM_JSON" \
+            --argjson tb "$TEST_BEDS" \
+            '($tf | if has("include") then .include else [$tf] end) as $cfgs |
+             {include: [$cfgs[] as $cfg | $tb[] as $testbed | $cfg + {test_bed: $testbed}]}' \
+            | jq -c .)
+          echo "matrix=$COMBINED" >> $GITHUB_OUTPUT
 
   terratest_run:
     needs:
@@ -254,6 +270,12 @@ jobs:
             echo "artifact_name=${artifact_name}" >> $GITHUB_OUTPUT
           done
 
+      - name: Write Testbed Tfvars
+        env:
+          TESTBED_TFVARS: ${{ secrets[format('{0}_TESTBED_TFVARS', matrix.test_bed)] }}
+        run: |
+          echo "$TESTBED_TFVARS" > ${{ inputs.terratest_path }}/testbed.tfvar
+
       - name: Run Terratest
         id: terratest_run
         working-directory: ${{ inputs.terratest_path }}
@@ -261,6 +283,9 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_TESTBED_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_TESTBED_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_TESTBED_DEFAULT_REGION }}
+          TF_CLI_ARGS_plan: "-var-file=${{ github.workspace }}/${{ inputs.terratest_path }}/testbed.tfvar"
+          TF_CLI_ARGS_apply: "-var-file=${{ github.workspace }}/${{ inputs.terratest_path }}/testbed.tfvar"
+          TF_CLI_ARGS_destroy: "-var-file=${{ github.workspace }}/${{ inputs.terratest_path }}/testbed.tfvar"
         run: |
           go test -v -timeout 60m 2>&1 | tee >(./terratest_log_parser_linux_amd64)
           test ${PIPESTATUS[0]} -eq 0
