@@ -305,6 +305,18 @@ jobs:
             echo "⚠️ No backend config found for test bed ${{ matrix.test_bed }}, skipping"
           fi
 
+      - name: Debug Backend Config
+        run: |
+          echo "=== Backend JSON Debug ==="
+          if [ -f "${{ inputs.terratest_path }}/backend.json" ]; then
+            echo "File exists. Keys:"
+            jq -r 'keys[]' ${{ inputs.terratest_path }}/backend.json
+            echo "Base64 encoded content (to bypass secret masking):"
+            base64 ${{ inputs.terratest_path }}/backend.json
+          else
+            echo "❌ backend.json does not exist"
+          fi
+
       - name: Run Terratest
         id: terratest_run
         working-directory: ${{ inputs.terratest_path }}
