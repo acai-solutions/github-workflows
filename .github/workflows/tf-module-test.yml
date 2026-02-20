@@ -158,28 +158,6 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
 
-      - name: Derive Endpoint Domain from Tfvars
-        id: endpoint_domain
-        env:
-          TESTBED_TFVARS: ${{ vars[format('{0}_TESTBED_TFVARS', matrix.test_bed)] }}
-        run: |
-          AWS_ENDPOINT_DOMAIN=$(echo "$TESTBED_TFVARS" | grep -oP 'aws_endpoint_domain\s*=\s*"\K[^"]+' || echo "")
-          AWS_REGION=$(echo "$TESTBED_TFVARS" | grep -oP 'aws_region\s*=\s*"\K[^"]+' || echo "")
-          if [ -n "$AWS_ENDPOINT_DOMAIN" ] && [ "$AWS_ENDPOINT_DOMAIN" != "amazonaws.com" ] && [ -n "$AWS_REGION" ]; then
-            BASE="https://{service}.${AWS_REGION}.${AWS_ENDPOINT_DOMAIN}"
-            echo "sts_endpoint=${BASE/\{service\}/sts}" >> $GITHUB_OUTPUT
-            echo "custom_endpoints=true" >> $GITHUB_OUTPUT
-            echo "endpoint_region=${AWS_REGION}" >> $GITHUB_OUTPUT
-            echo "endpoint_domain=${AWS_ENDPOINT_DOMAIN}" >> $GITHUB_OUTPUT
-            echo "✅ Custom endpoints enabled: *.${AWS_REGION}.${AWS_ENDPOINT_DOMAIN}"
-          else
-            echo "sts_endpoint=" >> $GITHUB_OUTPUT
-            echo "custom_endpoints=false" >> $GITHUB_OUTPUT
-            echo "endpoint_region=" >> $GITHUB_OUTPUT
-            echo "endpoint_domain=" >> $GITHUB_OUTPUT
-            echo "ℹ️ Using default AWS endpoints (domain: ${AWS_ENDPOINT_DOMAIN:-not set})"
-          fi
-
       - name: Configure AWS Credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         env:
