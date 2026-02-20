@@ -307,7 +307,7 @@ jobs:
 
       - name: Write Backend Config
         env:
-          BACKEND_JSON: ${{ secrets[format('{0}_TESTBED_BACKEND_JSON', matrix.test_bed)] }}
+          BACKEND_JSON: ${{ vars[format('{0}_TESTBED_BACKEND_JSON', matrix.test_bed)] }}
         run: |
           if [ -n "$BACKEND_JSON" ]; then
             echo "$BACKEND_JSON" > ${{ inputs.terratest_path }}/backend.json
