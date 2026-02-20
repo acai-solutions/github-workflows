@@ -76,7 +76,7 @@ on:
         required: true
       AWS_TESTBED_DEFAULT_REGION:
         required: true
-      AWS_BACKEND_JSON:
+      AWS_TESTBED_BACKEND_JSON:
         required: true
       AWS_TESTBED_TFVARS:
         required: true
@@ -87,7 +87,7 @@ on:
         required: false
       AWS_ESC_TESTBED_TFVARS:
         required: false
-      AWS_ESC_BACKEND_JSON:
+      AWS_ESC_TESTBED_BACKEND_JSON:
         required: false
     outputs: 
       all_checks_passed: 
