@@ -74,20 +74,8 @@ on:
       # Default AWS Testbed
       AWS_TESTBED_OIDC_ROLE_ARN:
         required: true
-      AWS_TESTBED_AWS_REGION:
-        required: true
-      AWS_TESTBED_BACKEND_JSON:
-        required: true
-      AWS_TESTBED_TFVARS:
-        required: true
       # Optional AWS-ESC Testbed
       AWS_ESC_TESTBED_OIDC_ROLE_ARN:
-        required: false
-      AWS_ESC_TESTBED_AWS_REGION:
-        required: false
-      AWS_ESC_TESTBED_TFVARS:
-        required: false
-      AWS_ESC_TESTBED_BACKEND_JSON:
         required: false
     outputs: 
       all_checks_passed: 
@@ -173,7 +161,7 @@ jobs:
       - name: Derive Endpoint Domain from Tfvars
         id: endpoint_domain
         env:
-          TESTBED_TFVARS: ${{ secrets[format('{0}_TESTBED_TFVARS', matrix.test_bed)] }}
+          TESTBED_TFVARS: ${{ vars[format('{0}_TESTBED_TFVARS', matrix.test_bed)] }}
         run: |
           AWS_ENDPOINT_DOMAIN=$(echo "$TESTBED_TFVARS" | grep -oP 'aws_endpoint_domain\s*=\s*"\K[^"]+' || echo "")
           AWS_REGION=$(echo "$TESTBED_TFVARS" | grep -oP 'aws_region\s*=\s*"\K[^"]+' || echo "")
@@ -198,7 +186,7 @@ jobs:
           AWS_ENDPOINT_URL_STS: ${{ steps.endpoint_domain.outputs.sts_endpoint }}
         with:
           role-to-assume: ${{ secrets[format('{0}_TESTBED_OIDC_ROLE_ARN', matrix.test_bed)] }}
-          aws-region: ${{ secrets[format('{0}_TESTBED_AWS_REGION', matrix.test_bed)] }}
+          aws-region: ${{ vars[format('{0}_TESTBED_AWS_REGION', matrix.test_bed)] }}
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -276,7 +264,6 @@ jobs:
                   i=$(echo $i | tr -d '"')
                   declare -a semver
                   semver=($(echo "$version" | tr '.' '\n'))
-                  # if X is on first position
                   if [[ "${semver[0]}" == "X" ]]; then
                     version=$i
                     break;
@@ -314,7 +301,7 @@ jobs:
 
       - name: Write Testbed Tfvars
         env:
-          TESTBED_TFVARS: ${{ secrets[format('{0}_TESTBED_TFVARS', matrix.test_bed)] }}
+          TESTBED_TFVARS: ${{ vars[format('{0}_TESTBED_TFVARS', matrix.test_bed)] }}
         run: |
           echo "$TESTBED_TFVARS" > ${{ inputs.terratest_path }}/testbed.tfvar
 
