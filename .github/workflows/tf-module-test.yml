@@ -74,7 +74,7 @@ on:
       # Default AWS Testbed
       AWS_TESTBED_OIDC_ROLE_ARN:
         required: true
-      AWS_TESTBED_DEFAULT_REGION:
+      AWS_TESTBED_AWS_REGION:
         required: true
       AWS_TESTBED_BACKEND_JSON:
         required: true
@@ -83,7 +83,7 @@ on:
       # Optional AWS-ESC Testbed
       AWS_ESC_TESTBED_OIDC_ROLE_ARN:
         required: false
-      AWS_ESC_TESTBED_DEFAULT_REGION:
+      AWS_ESC_TESTBED_AWS_REGION:
         required: false
       AWS_ESC_TESTBED_TFVARS:
         required: false
@@ -174,7 +174,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets[format('{0}_TESTBED_OIDC_ROLE_ARN', matrix.test_bed)] }}
-          aws-region: ${{ secrets[format('{0}_TESTBED_DEFAULT_REGION', matrix.test_bed)] }}
+          aws-region: ${{ secrets[format('{0}_TESTBED_AWS_REGION', matrix.test_bed)] }}
 
       - name: Setup Go
         uses: actions/setup-go@v6
