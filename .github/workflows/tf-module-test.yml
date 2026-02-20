@@ -178,10 +178,17 @@ jobs:
           AWS_ENDPOINT_DOMAIN=$(echo "$TESTBED_TFVARS" | grep -oP 'aws_endpoint_domain\s*=\s*"\K[^"]+' || echo "")
           AWS_REGION=$(echo "$TESTBED_TFVARS" | grep -oP 'aws_region\s*=\s*"\K[^"]+' || echo "")
           if [ -n "$AWS_ENDPOINT_DOMAIN" ] && [ "$AWS_ENDPOINT_DOMAIN" != "amazonaws.com" ] && [ -n "$AWS_REGION" ]; then
-            echo "sts_endpoint=https://sts.${AWS_REGION}.${AWS_ENDPOINT_DOMAIN}" >> $GITHUB_OUTPUT
-            echo "✅ Derived STS endpoint: https://sts.${AWS_REGION}.${AWS_ENDPOINT_DOMAIN}"
+            BASE="https://{service}.${AWS_REGION}.${AWS_ENDPOINT_DOMAIN}"
+            echo "sts_endpoint=${BASE/\{service\}/sts}" >> $GITHUB_OUTPUT
+            echo "custom_endpoints=true" >> $GITHUB_OUTPUT
+            echo "endpoint_region=${AWS_REGION}" >> $GITHUB_OUTPUT
+            echo "endpoint_domain=${AWS_ENDPOINT_DOMAIN}" >> $GITHUB_OUTPUT
+            echo "✅ Custom endpoints enabled: *.${AWS_REGION}.${AWS_ENDPOINT_DOMAIN}"
           else
             echo "sts_endpoint=" >> $GITHUB_OUTPUT
+            echo "custom_endpoints=false" >> $GITHUB_OUTPUT
+            echo "endpoint_region=" >> $GITHUB_OUTPUT
+            echo "endpoint_domain=" >> $GITHUB_OUTPUT
             echo "ℹ️ Using default AWS endpoints (domain: ${AWS_ENDPOINT_DOMAIN:-not set})"
           fi
 
@@ -327,6 +334,11 @@ jobs:
         working-directory: ${{ inputs.terratest_path }}
         env:
           AWS_ENDPOINT_URL_STS: ${{ steps.endpoint_domain.outputs.sts_endpoint }}
+          AWS_ENDPOINT_URL_IAM: ${{ steps.endpoint_domain.outputs.custom_endpoints == 'true' && format('https://iam.{0}.{1}', steps.endpoint_domain.outputs.endpoint_region, steps.endpoint_domain.outputs.endpoint_domain) || '' }}
+          AWS_ENDPOINT_URL_ORGANIZATIONS: ${{ steps.endpoint_domain.outputs.custom_endpoints == 'true' && format('https://organizations.{0}.{1}', steps.endpoint_domain.outputs.endpoint_region, steps.endpoint_domain.outputs.endpoint_domain) || '' }}
+          AWS_ENDPOINT_URL_S3: ${{ steps.endpoint_domain.outputs.custom_endpoints == 'true' && format('https://s3.{0}.{1}', steps.endpoint_domain.outputs.endpoint_region, steps.endpoint_domain.outputs.endpoint_domain) || '' }}
+          AWS_ENDPOINT_URL_DYNAMODB: ${{ steps.endpoint_domain.outputs.custom_endpoints == 'true' && format('https://dynamodb.{0}.{1}', steps.endpoint_domain.outputs.endpoint_region, steps.endpoint_domain.outputs.endpoint_domain) || '' }}
+          AWS_ENDPOINT_URL_CLOUDFORMATION: ${{ steps.endpoint_domain.outputs.custom_endpoints == 'true' && format('https://cloudformation.{0}.{1}', steps.endpoint_domain.outputs.endpoint_region, steps.endpoint_domain.outputs.endpoint_domain) || '' }}
           TF_CLI_ARGS_plan: "-var-file=${{ github.workspace }}/${{ inputs.terratest_path }}/testbed.tfvar"
           TF_CLI_ARGS_apply: "-var-file=${{ github.workspace }}/${{ inputs.terratest_path }}/testbed.tfvar"
           TF_CLI_ARGS_destroy: "-var-file=${{ github.workspace }}/${{ inputs.terratest_path }}/testbed.tfvar"
