@@ -96,6 +96,11 @@ on:
         required: false
         default: true
         type: boolean
+      test_beds:
+        description: "List of test beds to run tests against (JSON array of cloud provider prefixes, e.g. [\"AWS\"])"
+        required: false
+        default: '["AWS"]'
+        type: string
       terratest_config_repo_path:
         description: 'Path to terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws/matrix.json")'
         default: "aws/matrix_tf1x5x7_aws5x100x0.json"
@@ -111,19 +116,6 @@ on:
         default: "examples"
         required: false
         type: string
-    secrets:
-      GH_REPO_READ_APP_ID:
-        required: true
-      GH_REPO_READ_APP_PRIVATE_KEY:
-        required: true
-      TFC_API_TOKEN:
-        required: true
-      AWS_TESTBED_ACCESS_KEY_ID:
-        required: true
-      AWS_TESTBED_SECRET_ACCESS_KEY:
-        required: true
-      AWS_TESTBED_DEFAULT_REGION:
-        required: true
         
     outputs:
       all_checks_passed:
@@ -189,16 +181,11 @@ jobs:
       tf_trivy_version: ${{ inputs.tf_trivy_version }}
       tf_checkov_failures_allow: ${{ inputs.tf_checkov_failures_allow }}
       terratest_run_tests: ${{ inputs.terratest_run_tests }}
+      test_beds: ${{ inputs.test_beds }}
       terratest_config_repo_path: ${{ inputs.terratest_config_repo_path }}
       terratest_path: ${{ inputs.terratest_path }}
       terratest_examples_path: ${{ inputs.terratest_examples_path }}
-    secrets: 
-      GH_REPO_READ_APP_ID: ${{ secrets.GH_REPO_READ_APP_ID }}
-      GH_REPO_READ_APP_PRIVATE_KEY: ${{ secrets.GH_REPO_READ_APP_PRIVATE_KEY }}
-      TFC_API_TOKEN: ${{ secrets.TFC_API_TOKEN }}
-      AWS_TESTBED_ACCESS_KEY_ID: ${{ secrets.AWS_TESTBED_ACCESS_KEY_ID }}
-      AWS_TESTBED_SECRET_ACCESS_KEY: ${{ secrets.AWS_TESTBED_SECRET_ACCESS_KEY }}
-      AWS_TESTBED_DEFAULT_REGION: ${{ secrets.AWS_TESTBED_DEFAULT_REGION }}
+    secrets: inherit
 
   tf_py_checks_summary:
     needs:
