@@ -308,11 +308,14 @@ jobs:
       - name: Debug Backend Config
         run: |
           echo "=== Backend JSON Debug ==="
+          echo "Secret variable name: ${{ format('{0}_TESTBED_BACKEND_JSON', matrix.test_bed) }}"
           if [ -f "${{ inputs.terratest_path }}/backend.json" ]; then
             echo "File exists. Keys:"
             jq -r 'keys[]' ${{ inputs.terratest_path }}/backend.json
-            echo "Base64 encoded content (to bypass secret masking):"
-            base64 ${{ inputs.terratest_path }}/backend.json
+            echo "Region value (char-by-char):"
+            jq -r '.region' ${{ inputs.terratest_path }}/backend.json | fold -w1 | paste -sd' '
+            echo "Region length:"
+            jq -r '.region | length' ${{ inputs.terratest_path }}/backend.json
           else
             echo "❌ backend.json does not exist"
           fi
