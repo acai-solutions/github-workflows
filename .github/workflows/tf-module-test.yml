@@ -64,6 +64,27 @@ on:
         default: '["AWS"]'
         required: false
         type: string
+    secrets:
+      GH_REPO_READ_APP_ID:
+        required: true
+      GH_REPO_READ_APP_PRIVATE_KEY:
+        required: true
+      TFC_API_TOKEN:
+        required: true
+      AWS_TESTBED_ACCESS_KEY_ID:
+        required: true
+      AWS_TESTBED_SECRET_ACCESS_KEY:
+        required: true
+      AWS_TESTBED_DEFAULT_REGION:
+        required: true
+      AWS_TESTBED_TFVARS:
+        required: true
+      AWS_ESC_TESTBED_TFVARS:
+        required: false
+      AWS_TESTBED_BACKEND_JSON:
+        required: true
+      AWS_ESC_TESTBED_BACKEND_JSON:
+        required: false
     outputs: 
       all_checks_passed: 
         description: "all_steps_passed"

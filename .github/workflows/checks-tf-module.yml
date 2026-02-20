@@ -196,6 +196,8 @@ jobs:
       AWS_TESTBED_ACCESS_KEY_ID: ${{ secrets.AWS_TESTBED_ACCESS_KEY_ID }}
       AWS_TESTBED_SECRET_ACCESS_KEY: ${{ secrets.AWS_TESTBED_SECRET_ACCESS_KEY }}
       AWS_TESTBED_DEFAULT_REGION: ${{ secrets.AWS_TESTBED_DEFAULT_REGION }}
+      AWS_TESTBED_TFVARS: ${{ secrets.AWS_TESTBED_TFVARS }}
+      AWS_TESTBED_BACKEND_JSON: ${{ secrets.AWS_TESTBED_BACKEND_JSON }}
       
   tf_module_checks_summary:
     needs:
