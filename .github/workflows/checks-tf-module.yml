@@ -98,9 +98,14 @@ on:
         required: false
         default: '["AWS"]'
         type: string
-      terratest_config_repo_path:
-        description: 'Path to terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws/matrix.json")'
+      test_bed_aws_terratest_config:
+        description: 'Path to AWS terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws/matrix.json")'
         default: "aws/matrix_tf1x5x7_aws5x100x0.json"
+        required: false
+        type: string
+      test_bed_aws_esc_terratest_config:
+        description: 'Path to AWS-ESC terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws-esc/matrix.json")'
+        default: "aws/matrix_tf1x14x0_aws6x29x0.json"
         required: false
         type: string
       terratest_path:
@@ -172,7 +177,8 @@ jobs:
     with:
       terratest_config_repo: ${{ inputs.gh_wf_config_repo }}
       terratest_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
-      terratest_config_repo_path: ${{ inputs.terratest_config_repo_path }}
+      test_bed_aws_terratest_config: ${{ inputs.test_bed_aws_terratest_config }}
+      test_bed_aws_esc_terratest_config: ${{ inputs.test_bed_aws_esc_terratest_config }}
       terratest_path: ${{ inputs.terratest_path }}
       terratest_examples_path: ${{ inputs.terratest_examples_path }}
       test_beds: ${{ inputs.test_beds }}
