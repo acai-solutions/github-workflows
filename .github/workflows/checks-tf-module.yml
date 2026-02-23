@@ -172,16 +172,16 @@ jobs:
   terraform_module_test:
     needs:
       - terraform_security
-    uses: acai-solutions/github-workflows/.github/workflows/tf-module-test.yml@aws_esc
+    uses: acai-solutions/github-workflows/.github/workflows/tf-module-test.yml@main
     if: ${{ inputs.terratest_run_tests && needs.terraform_security.outputs.all_checks_passed == 'true' }}
     with:
       terratest_config_repo: ${{ inputs.gh_wf_config_repo }}
       terratest_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
-      test_bed_aws_terratest_config: ${{ inputs.test_bed_aws_terratest_config }}
-      test_bed_aws_esc_terratest_config: ${{ inputs.test_bed_aws_esc_terratest_config }}
       terratest_path: ${{ inputs.terratest_path }}
       terratest_examples_path: ${{ inputs.terratest_examples_path }}
       test_beds: ${{ inputs.test_beds }}
+      test_bed_aws_terratest_config: ${{ inputs.test_bed_aws_terratest_config }}
+      test_bed_aws_esc_terratest_config: ${{ inputs.test_bed_aws_esc_terratest_config }}
     secrets: inherit
       
   tf_module_checks_summary:
