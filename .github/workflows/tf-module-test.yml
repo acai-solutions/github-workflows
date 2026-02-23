@@ -39,11 +39,6 @@ on:
         default: "main"
         required: false
         type: string
-      terratest_config_repo_path:
-        description: 'Path to terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws/matrix.json")'
-        default: "aws/matrix_tf1x0x0_aws4x5x0.json"
-        required: false
-        type: string
       terratest_path:
         description: "Path to terratest directory"
         default: "test/terratest"
@@ -59,6 +54,21 @@ on:
         default: 1
         required: false
         type: number
+      test_beds:
+        description: "List of test beds to run tests against (JSON array of cloud provider prefixes, e.g. [\"AWS\"])"
+        default: '["AWS"]'
+        required: false
+        type: string
+      test_bed_aws_terratest_config:
+        description: 'Path to AWS terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws/matrix.json")'
+        default: "aws/matrix_tf1x0x0_aws4x5x0.json"
+        required: false
+        type: string
+      test_bed_aws_esc_terratest_config:
+        description: 'Path to AWS-ESC terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws-esc/matrix.json")'
+        default: "aws/matrix_tf1x14x0_aws6x29x0.json"
+        required: false
+        type: string
     secrets:
       GH_REPO_READ_APP_ID:
         required: true
@@ -66,12 +76,12 @@ on:
         required: true
       TFC_API_TOKEN:
         required: true
-      AWS_TESTBED_ACCESS_KEY_ID:
+      # Default AWS Testbed
+      AWS_TESTBED_OIDC_ROLE_ARN:
         required: true
-      AWS_TESTBED_SECRET_ACCESS_KEY:
-        required: true
-      AWS_TESTBED_DEFAULT_REGION:
-        required: true
+      # Optional AWS-ESC Testbed
+      AWS_ESC_TESTBED_OIDC_ROLE_ARN:
+        required: false
     outputs: 
       all_checks_passed: 
         description: "all_steps_passed"
@@ -86,7 +96,7 @@ jobs:
     steps:
       # Obtain GitHub App installation token for repo access
       - name: Get GitHub App Token
-        if: ${{ inputs.terratest_config_repo_path != '' }}
+        if: ${{ inputs.test_beds != '[]' }}
         id: app-token
         uses: actions/create-github-app-token@v2
         with:
@@ -95,7 +105,7 @@ jobs:
           owner: ${{ github.repository_owner }}
 
       - name: Checkout
-        if: ${{ inputs.terratest_config_repo_path != '' }}
+        if: ${{ inputs.test_beds != '[]' }}
         uses: actions/checkout@v5
         with:
           repository: ${{ inputs.terratest_config_repo }}
@@ -103,11 +113,32 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Get Terratest Matrix Config
-        if: ${{ inputs.terratest_config_repo_path != '' }}
+        if: ${{ inputs.test_beds != '[]' }}
         id: set_matrix
         run: |
-          JSON=$(cat terraform/terratest/${{ inputs.terratest_config_repo_path }} | jq -c .)
-          echo "matrix=$JSON" >> $GITHUB_OUTPUT
+          # Build combined matrix from all configured test beds
+          COMBINED='{"include":[]}'
+          TEST_BEDS='${{ inputs.test_beds }}'
+          
+          # Process AWS test bed config if "AWS" is in test_beds
+          if echo "$TEST_BEDS" | jq -e 'index("AWS")' > /dev/null 2>&1; then
+            if [ -n "${{ inputs.test_bed_aws_terratest_config }}" ]; then
+              AWS_JSON=$(cat terraform/terratest/${{ inputs.test_bed_aws_terratest_config }} | jq -c .)
+              AWS_MATRIX=$(echo "$AWS_JSON" | jq -c 'if has("include") then .include else [.] end | [.[] + {test_bed: "AWS"}]')
+              COMBINED=$(echo "$COMBINED" | jq -c --argjson items "$AWS_MATRIX" '.include += $items')
+            fi
+          fi
+          
+          # Process AWS-ESC test bed config if "AWS_ESC" is in test_beds
+          if echo "$TEST_BEDS" | jq -e 'index("AWS_ESC")' > /dev/null 2>&1; then
+            if [ -n "${{ inputs.test_bed_aws_esc_terratest_config }}" ]; then
+              AWS_ESC_JSON=$(cat terraform/terratest/${{ inputs.test_bed_aws_esc_terratest_config }} | jq -c .)
+              AWS_ESC_MATRIX=$(echo "$AWS_ESC_JSON" | jq -c 'if has("include") then .include else [.] end | [.[] + {test_bed: "AWS_ESC"}]')
+              COMBINED=$(echo "$COMBINED" | jq -c --argjson items "$AWS_ESC_MATRIX" '.include += $items')
+            fi
+          fi
+          
+          echo "matrix=$COMBINED" >> $GITHUB_OUTPUT
 
   terratest_run:
     needs:
@@ -115,6 +146,10 @@ jobs:
     runs-on: ${{ inputs.runner_type }}
     outputs:
       terratest_status: ${{ steps.terratest_summary.outcome }}
+
+    permissions:
+      id-token: write
+      contents: read
 
     strategy:
       max-parallel: ${{ inputs.terratest_max_parallel }}
@@ -141,6 +176,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        env:
+          AWS_ENDPOINT_URL_STS: ${{ steps.endpoint_domain.outputs.sts_endpoint }}
+        with:
+          role-to-assume: ${{ secrets[format('{0}_TESTBED_OIDC_ROLE_ARN', matrix.test_bed)] }}
+          aws-region: ${{ vars[format('{0}_TESTBED_AWS_REGION', matrix.test_bed)] }}
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -218,7 +261,6 @@ jobs:
                   i=$(echo $i | tr -d '"')
                   declare -a semver
                   semver=($(echo "$version" | tr '.' '\n'))
-                  # if X is on first position
                   if [[ "${semver[0]}" == "X" ]]; then
                     version=$i
                     break;
@@ -254,13 +296,30 @@ jobs:
             echo "artifact_name=${artifact_name}" >> $GITHUB_OUTPUT
           done
 
+      - name: Write Testbed Tfvars
+        env:
+          TESTBED_TFVARS: ${{ vars[format('{0}_TESTBED_TFVARS', matrix.test_bed)] }}
+        run: |
+          echo "$TESTBED_TFVARS" > ${{ inputs.terratest_path }}/testbed.tfvar
+
+      - name: Write Backend Config
+        env:
+          BACKEND_JSON: ${{ vars[format('{0}_TESTBED_BACKEND_JSON', matrix.test_bed)] }}
+        run: |
+          if [ -n "$BACKEND_JSON" ]; then
+            echo "$BACKEND_JSON" > ${{ inputs.terratest_path }}/backend.json
+            echo "✅ Backend config written to ${{ inputs.terratest_path }}/backend.json"
+          else
+            echo "⚠️ No backend config found for test bed ${{ matrix.test_bed }}, skipping"
+          fi
+
       - name: Run Terratest
         id: terratest_run
         working-directory: ${{ inputs.terratest_path }}
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_TESTBED_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_TESTBED_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_TESTBED_DEFAULT_REGION }}
+          TF_CLI_ARGS_plan: "-var-file=${{ github.workspace }}/${{ inputs.terratest_path }}/testbed.tfvar"
+          TF_CLI_ARGS_apply: "-var-file=${{ github.workspace }}/${{ inputs.terratest_path }}/testbed.tfvar"
+          TF_CLI_ARGS_destroy: "-var-file=${{ github.workspace }}/${{ inputs.terratest_path }}/testbed.tfvar"
         run: |
           go test -v -timeout 60m 2>&1 | tee >(./terratest_log_parser_linux_amd64)
           test ${PIPESTATUS[0]} -eq 0
