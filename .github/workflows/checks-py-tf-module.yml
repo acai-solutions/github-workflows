@@ -103,7 +103,7 @@ on:
         type: string
       test_bed_aws_terratest_config:
         description: 'Path to AWS terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws/matrix.json")'
-        default: "aws/matrix_tf1x5x7_aws5x100x0.json"
+        default: "aws/matrix_tf1x5x7_aws5x80x0.json"
         required: false
         type: string
       test_bed_aws_esc_terratest_config:
