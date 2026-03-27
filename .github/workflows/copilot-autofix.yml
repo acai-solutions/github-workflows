@@ -404,14 +404,14 @@ jobs:
           bandit -r . -f json -o /tmp/bandit-findings.json 2>/dev/null || true
 
           FINDING_COUNT=$(python3 -c "
-import json, sys
-try:
-    with open('/tmp/bandit-findings.json') as f:
-        data = json.load(f)
-    print(len(data.get('results', [])))
-except Exception:
-    print(0)
-")
+          import json, sys
+          try:
+              with open('/tmp/bandit-findings.json') as f:
+                  data = json.load(f)
+              print(len(data.get('results', [])))
+          except Exception:
+              print(0)
+          ")
 
           echo "finding_count=$FINDING_COUNT" >> "$GITHUB_OUTPUT"
           echo "📋 Bandit findings: $FINDING_COUNT"
