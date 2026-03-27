@@ -343,7 +343,16 @@ jobs:
         continue-on-error: true
         run: |
           # Run flake8 and capture JSON output
-          flake8 . --format=json --output-file=/tmp/flake8-findings.json 2>/dev/null || true
+          # Explicitly reference repo-root config if it exists (working-directory may differ)
+          FLAKE8_ARGS=". --format=json --output-file=/tmp/flake8-findings.json"
+          if [[ -f "${GITHUB_WORKSPACE}/.flake8" ]]; then
+            FLAKE8_ARGS="${FLAKE8_ARGS} --config=${GITHUB_WORKSPACE}/.flake8"
+            echo "📋 Using .flake8 config from repo root"
+          elif [[ -f "${GITHUB_WORKSPACE}/setup.cfg" ]]; then
+            FLAKE8_ARGS="${FLAKE8_ARGS} --config=${GITHUB_WORKSPACE}/setup.cfg"
+            echo "📋 Using setup.cfg config from repo root"
+          fi
+          flake8 ${FLAKE8_ARGS} 2>/dev/null || true
 
           FINDING_COUNT=$(python3 -c "
           import json, sys
