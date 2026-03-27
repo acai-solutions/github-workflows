@@ -180,9 +180,17 @@ jobs:
       (needs.python_base.outputs.all_steps_passed == 'true' || needs.python_base.result == 'skipped') &&
       (needs.python_tests.outputs.all_tests_passed == 'true' || needs.python_tests.result == 'skipped')
     steps:
+      - name: Generate GitHub App Token
+        id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+
       - name: "Create PR: _cop → feature branch"
         uses: actions/github-script@v7
         with:
+          github-token: ${{ steps.app_token.outputs.token }}
           script: |
             const copBranch = context.ref.replace('refs/heads/', '');
             const featureBranch = copBranch.replace(/_cop$/, '');

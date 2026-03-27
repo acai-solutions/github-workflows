@@ -97,6 +97,14 @@ on:
         required: false
         type: string
 
+    secrets:
+      app_id:
+        description: "GitHub App ID for generating tokens that trigger workflows"
+        required: true
+      app_private_key:
+        description: "GitHub App private key (PEM)"
+        required: true
+
     outputs:
       fixes_applied:
         description: "Whether fixes were pushed to _cop branch"
@@ -195,11 +203,18 @@ jobs:
       fix_summary: ${{ steps.commit.outputs.fix_summary }}
 
     steps:
+      - name: Generate GitHub App Token
+        id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+
       - name: Checkout Repository
         uses: actions/checkout@v5
         with:
           ref: ${{ needs.guard.outputs.current_branch }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app_token.outputs.token }}
           fetch-depth: 0
 
       # ── Create _cop branch (only if not already on it) ──────────────────
@@ -532,8 +547,12 @@ jobs:
 
       - name: "Push _cop branch → triggers CI recheck"
         if: steps.commit.outputs.fixes_applied == 'true'
+        env:
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
           COP_BRANCH="${{ needs.guard.outputs.cop_branch }}"
+          # Use App token so the push triggers subsequent workflow runs
+          git remote set-url origin "https://x-access-token:${GH_APP_TOKEN}@github.com/${{ github.repository }}.git"
           git push origin "HEAD:${COP_BRANCH}"
           echo "✅ Pushed to ${COP_BRANCH} — CI re-triggers automatically"
 
