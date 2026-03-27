@@ -12,7 +12,8 @@ name: Copilot Autofix
 #   - NO auto-merge: when checks pass, caller creates PR (_cop → feature)
 #
 # Fix types (can be combined):
-#   - fix_python:    Black, isort, Ruff (deterministic) + Flake8/Copilot (AI)
+#   - fix_python:    Flake8 + Bandit (detect) → Copilot AI fix
+#                    (Black/isort/Ruff are already handled by python-base.yml)
 #   - fix_terraform: terraform fmt (deterministic) + TFLint/Copilot (AI)
 #
 # Trigger chain:
@@ -36,7 +37,7 @@ on:
 
       # ── Fix type selection ──────────────────────────────────────────────
       fix_python:
-        description: "Apply Python auto-fixes (Black, isort, Ruff, Flake8+Copilot)"
+        description: "Apply Python auto-fixes (Flake8+Bandit detection → Copilot AI fix)"
         required: false
         default: false
         type: boolean
@@ -294,7 +295,8 @@ jobs:
           fi
 
       # ════════════════════════════════════════════════════════════════════
-      # PYTHON FIXES
+      # PYTHON: DETECT FINDINGS (Flake8 + Bandit)
+      # (Black/isort/Ruff are handled by python-base.yml)
       # ════════════════════════════════════════════════════════════════════
 
       - name: Set up Python ${{ inputs.python_version }}
@@ -308,7 +310,7 @@ jobs:
         if: inputs.fix_python
         run: |
           python -m pip install --upgrade pip
-          pip install black isort ruff flake8 flake8-json
+          pip install flake8 flake8-json bandit
 
           if [[ -n "${{ inputs.extra_pip_packages }}" ]]; then
             pip install ${{ inputs.extra_pip_packages }}
@@ -319,54 +321,8 @@ jobs:
             pip install -e "${{ inputs.python_source_path }}"
           fi
 
-      # ── Python Phase 1: Deterministic fixes ─────────────────────────────
-      - name: "PY Phase 1a: Black formatting"
-        id: black
-        if: inputs.fix_python
-        working-directory: ${{ inputs.python_source_path }}
-        run: |
-          if black --check --quiet . 2>/dev/null; then
-            echo "changes=false" >> "$GITHUB_OUTPUT"
-          else
-            black .
-            echo "changes=true" >> "$GITHUB_OUTPUT"
-            echo "✅ Black formatting applied"
-          fi
-
-      - name: "PY Phase 1b: isort import sorting"
-        id: isort
-        if: inputs.fix_python
-        working-directory: ${{ inputs.python_source_path }}
-        run: |
-          if isort --check-only --quiet . 2>/dev/null; then
-            echo "changes=false" >> "$GITHUB_OUTPUT"
-          else
-            isort . --profile black
-            echo "changes=true" >> "$GITHUB_OUTPUT"
-            echo "✅ isort applied"
-          fi
-
-      - name: "PY Phase 1c: Ruff auto-fix (safe fixes only)"
-        id: ruff
-        if: inputs.fix_python
-        working-directory: ${{ inputs.python_source_path }}
-        continue-on-error: true
-        run: |
-          if ruff check . 2>/dev/null; then
-            echo "changes=false" >> "$GITHUB_OUTPUT"
-          else
-            # Only apply safe, non-breaking fixes
-            ruff check --fix --unsafe-fixes=false . 2>/dev/null || true
-            if [[ -n "$(git diff --name-only)" ]]; then
-              echo "changes=true" >> "$GITHUB_OUTPUT"
-              echo "✅ Ruff auto-fix applied"
-            else
-              echo "changes=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
-      # ── Python Phase 2: Collect remaining findings for Copilot ──────────
-      - name: "PY Phase 2: Ensure flake8 config is available"
+      # ── Python: Collect findings for Copilot AI fix ─────────────────────
+      - name: "PY: Ensure flake8 config is available"
         id: flake8_config
         if: inputs.fix_python && inputs.copilot_fix_flake8
         run: |
@@ -416,7 +372,7 @@ jobs:
             echo "⚠️ No .flake8 found — flake8 will use defaults"
           fi
 
-      - name: "PY Phase 2: Collect remaining flake8 findings"
+      - name: "PY: Collect flake8 findings"
         id: flake8_check
         if: inputs.fix_python && inputs.copilot_fix_flake8
         working-directory: ${{ inputs.python_source_path }}
@@ -437,9 +393,30 @@ jobs:
           ")
 
           echo "finding_count=$FINDING_COUNT" >> "$GITHUB_OUTPUT"
-          echo "📋 Remaining flake8 findings after deterministic fixes: $FINDING_COUNT"
+          echo "📋 Flake8 findings: $FINDING_COUNT"
 
-      - name: "PY Phase 2: Run tests and capture failures"
+      - name: "PY: Collect bandit findings"
+        id: bandit_check
+        if: inputs.fix_python
+        working-directory: ${{ inputs.python_source_path }}
+        continue-on-error: true
+        run: |
+          bandit -r . -f json -o /tmp/bandit-findings.json 2>/dev/null || true
+
+          FINDING_COUNT=$(python3 -c "
+import json, sys
+try:
+    with open('/tmp/bandit-findings.json') as f:
+        data = json.load(f)
+    print(len(data.get('results', [])))
+except Exception:
+    print(0)
+")
+
+          echo "finding_count=$FINDING_COUNT" >> "$GITHUB_OUTPUT"
+          echo "📋 Bandit findings: $FINDING_COUNT"
+
+      - name: "PY: Run tests and capture failures"
         id: test_check
         if: inputs.fix_python && inputs.copilot_fix_tests
         working-directory: ${{ inputs.python_source_path }}
@@ -547,6 +524,71 @@ jobs:
             echo "copilot_changes=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: "AI Phase: Copilot fix — bandit findings"
+        id: copilot_bandit
+        if: >
+          inputs.fix_python &&
+          steps.bandit_check.outputs.finding_count != '0' &&
+          steps.bandit_check.outputs.finding_count != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: ${{ inputs.python_source_path }}
+        run: |
+          echo "🤖 Asking Copilot to fix ${{ steps.bandit_check.outputs.finding_count }} bandit findings..."
+
+          python3 << 'PYEOF'
+          import json, subprocess, os, sys
+
+          try:
+              with open("/tmp/bandit-findings.json") as f:
+                  data = json.load(f)
+          except Exception:
+              sys.exit(0)
+
+          results = data.get("results", [])
+          if not results:
+              sys.exit(0)
+
+          # Group by file
+          by_file = {}
+          for r in results:
+              fp = r.get("filename", "")
+              by_file.setdefault(fp, []).append(r)
+
+          for filepath, issues in by_file.items():
+              if not os.path.exists(filepath):
+                  continue
+
+              findings_text = "\n".join(
+                  f"  Line {i['line_number']}: [{i['test_id']}] {i['issue_text']} (Severity: {i['issue_severity']}, Confidence: {i['issue_confidence']})"
+                  for i in issues[:10]
+              )
+
+              print(f"  📝 Bandit findings for {filepath}:")
+              print(findings_text)
+
+              try:
+                  result = subprocess.run(
+                      ["gh", "copilot", "suggest", "-t", "code",
+                       f"Fix these bandit security issues in {filepath}: {findings_text}"],
+                      capture_output=True, text=True, timeout=60,
+                      env={**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")}
+                  )
+                  if result.returncode == 0 and result.stdout.strip():
+                      print(f"  ✅ Copilot suggestion received for {filepath}")
+                  else:
+                      print(f"  ⚠️ Copilot did not return a fix for {filepath}")
+              except (subprocess.TimeoutExpired, FileNotFoundError):
+                  print(f"  ⚠️ gh copilot not available, skipping AI fix for {filepath}")
+
+          PYEOF
+
+          if [[ -n "$(git diff --name-only)" ]]; then
+            echo "copilot_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "copilot_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: "AI Phase: Copilot fix — test failures"
         id: copilot_tests
         if: >
@@ -594,10 +636,8 @@ jobs:
           # Build commit message with summary of applied tools
           SUMMARY=""
           [[ "${{ steps.tf_fmt.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}tf-fmt "
-          [[ "${{ steps.black.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}black "
-          [[ "${{ steps.isort.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}isort "
-          [[ "${{ steps.ruff.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}ruff "
           [[ "${{ steps.copilot_flake8.outputs.copilot_changes }}" == "true" ]] && SUMMARY="${SUMMARY}copilot-flake8 "
+          [[ "${{ steps.copilot_bandit.outputs.copilot_changes }}" == "true" ]] && SUMMARY="${SUMMARY}copilot-bandit "
 
           git add -A
           git commit -m "fix: auto-fix findings [${SUMMARY% }] (iteration ${NEXT})
@@ -643,10 +683,10 @@ jobs:
           fi
 
           if [[ "${{ inputs.fix_python }}" == "true" ]]; then
-            echo "| Deterministic | Black | ${{ steps.black.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Deterministic | isort | ${{ steps.isort.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Deterministic | Ruff | ${{ steps.ruff.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Detection | Flake8 | ${{ steps.flake8_check.outputs.finding_count || '0' }} findings |" >> $GITHUB_STEP_SUMMARY
+            echo "| Detection | Bandit | ${{ steps.bandit_check.outputs.finding_count || '0' }} findings |" >> $GITHUB_STEP_SUMMARY
             echo "| AI-based | Copilot (flake8) | ${{ steps.copilot_flake8.outputs.copilot_changes == 'true' && '✅ Applied' || '⏭️ Clean / Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| AI-based | Copilot (bandit) | ${{ steps.copilot_bandit.outputs.copilot_changes == 'true' && '✅ Applied' || '⏭️ Clean / Skipped' }} |" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo '' >> $GITHUB_STEP_SUMMARY
