@@ -256,6 +256,9 @@ jobs:
       max_copilot_attempts: ${{ inputs.max_copilot_attempts }}
       commit_user: ${{ inputs.commit_user }}
       commit_email: ${{ inputs.commit_email }}
+      gh_wf_config_repo: ${{ inputs.gh_wf_config_repo }}
+      gh_wf_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
+      python_config_path: ${{ inputs.python_lint_config_path }}
     secrets: inherit
 
   # ── Create PR from _cop → feature when checks pass on _cop ─────────
