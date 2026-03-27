@@ -351,23 +351,38 @@ jobs:
           fi
 
       # ── Python Phase 2: Collect remaining findings for Copilot ──────────
+      - name: "PY Phase 2: Ensure flake8 config is available"
+        id: flake8_config
+        if: inputs.fix_python && inputs.copilot_fix_flake8
+        run: |
+          SOURCE_PATH="${{ inputs.python_source_path }}"
+          # If .flake8 exists at repo root but not in python_source_path, copy it
+          if [[ -f ".flake8" && "${SOURCE_PATH}" != "." && ! -f "${SOURCE_PATH}/.flake8" ]]; then
+            cp .flake8 "${SOURCE_PATH}/.flake8"
+            echo "📋 Copied .flake8 from repo root to ${SOURCE_PATH}/"
+            echo "copied=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "copied=false" >> "$GITHUB_OUTPUT"
+          fi
+          # Show active config
+          if [[ -f "${SOURCE_PATH}/.flake8" ]]; then
+            echo "📋 Active .flake8 config:"
+            cat "${SOURCE_PATH}/.flake8"
+          elif [[ -f ".flake8" ]]; then
+            echo "📋 Active .flake8 config (repo root):"
+            cat .flake8
+          else
+            echo "⚠️ No .flake8 found — flake8 will use defaults"
+          fi
+
       - name: "PY Phase 2: Collect remaining flake8 findings"
         id: flake8_check
         if: inputs.fix_python && inputs.copilot_fix_flake8
         working-directory: ${{ inputs.python_source_path }}
         continue-on-error: true
         run: |
-          # Run flake8 and capture JSON output
-          # Explicitly reference repo-root config if it exists (working-directory may differ)
-          FLAKE8_ARGS=". --format=json --output-file=/tmp/flake8-findings.json"
-          if [[ -f "${GITHUB_WORKSPACE}/.flake8" ]]; then
-            FLAKE8_ARGS="${FLAKE8_ARGS} --config=${GITHUB_WORKSPACE}/.flake8"
-            echo "📋 Using .flake8 config from repo root"
-          elif [[ -f "${GITHUB_WORKSPACE}/setup.cfg" ]]; then
-            FLAKE8_ARGS="${FLAKE8_ARGS} --config=${GITHUB_WORKSPACE}/setup.cfg"
-            echo "📋 Using setup.cfg config from repo root"
-          fi
-          flake8 ${FLAKE8_ARGS} 2>/dev/null || true
+          # .flake8 is now in CWD (copied from repo root if needed)
+          flake8 . --format=json --output-file=/tmp/flake8-findings.json 2>/dev/null || true
 
           FINDING_COUNT=$(python3 -c "
           import json, sys
@@ -513,6 +528,13 @@ jobs:
       # ════════════════════════════════════════════════════════════════════
       # COMMIT & PUSH
       # ════════════════════════════════════════════════════════════════════
+
+      - name: "Clean up copied config files"
+        if: steps.flake8_config.outputs.copied == 'true'
+        run: |
+          SOURCE_PATH="${{ inputs.python_source_path }}"
+          rm -f "${SOURCE_PATH}/.flake8"
+          echo "🧹 Removed copied .flake8 from ${SOURCE_PATH}/"
 
       - name: "Commit fixes on _cop branch"
         id: commit
