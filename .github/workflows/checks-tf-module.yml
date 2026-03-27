@@ -119,6 +119,18 @@ on:
         required: false
         type: string
 
+      # Copilot Autofix inputs
+      autofix_include:
+        description: "Whether to run Copilot autofix on _cop branch when checks fail"
+        required: false
+        default: false
+        type: boolean
+      max_copilot_attempts:
+        description: "Maximum number of Copilot fix iterations on _cop branch"
+        required: false
+        default: 3
+        type: number
+
     outputs:
       all_checks_passed:
         description: Indicates if all pipeline steps passed successfully
@@ -134,6 +146,12 @@ on:
       security_test_status:
         description: Security checks status
         value: ${{ jobs.terraform_security.outputs.all_checks_passed }}
+      autofix_applied:
+        description: Whether Copilot autofix was applied
+        value: ${{ jobs.copilot_autofix.outputs.fixes_applied }}
+      cop_branch:
+        description: Name of the _cop branch used for fixes
+        value: ${{ jobs.copilot_autofix.outputs.cop_branch }}
 
 # Replace scalar with object to namespace and optionally cancel prior runs
 concurrency:
@@ -184,11 +202,107 @@ jobs:
       test_bed_aws_esc_terratest_config: ${{ inputs.test_bed_aws_esc_terratest_config }}
     secrets: inherit
       
+  # ── Optional: Copilot Autofix on _cop branch (only on failure) ──────
+  copilot_autofix:
+    needs:
+      - terraform_base
+      - terraform_security
+      - terraform_module_test
+    if: |
+      always() &&
+      inputs.autofix_include &&
+      (needs.terraform_base.outputs.all_checks_passed != 'true' ||
+       needs.terraform_security.outputs.all_checks_passed != 'true' ||
+       (needs.terraform_module_test.result != 'skipped' && needs.terraform_module_test.outputs.all_checks_passed != 'true')) &&
+      !(needs.terraform_base.result == 'skipped' && needs.terraform_security.result == 'skipped' && needs.terraform_module_test.result == 'skipped')
+    uses: acai-solutions/github-workflows/.github/workflows/copilot-autofix.yml@main
+    with:
+      runner_type: ${{ inputs.runner_type }}
+      fix_terraform: true
+      tf_version: ${{ inputs.tf_version }}
+      max_copilot_attempts: ${{ inputs.max_copilot_attempts }}
+      commit_user: ${{ inputs.commit_user }}
+      commit_email: ${{ inputs.commit_email }}
+    secrets: inherit
+
+  # ── Create PR from _cop → feature when checks pass on _cop ─────────
+  create_cop_pr:
+    needs:
+      - terraform_base
+      - terraform_security
+      - terraform_module_test
+    runs-on: ${{ inputs.runner_type }}
+    if: |
+      always() &&
+      inputs.autofix_include &&
+      endsWith(github.ref_name, '_cop') &&
+      needs.terraform_base.outputs.all_checks_passed == 'true' &&
+      needs.terraform_security.outputs.all_checks_passed == 'true' &&
+      (needs.terraform_module_test.result == 'skipped' || needs.terraform_module_test.outputs.all_checks_passed == 'true')
+    steps:
+      - name: "Create PR: _cop → feature branch"
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const copBranch = context.ref.replace('refs/heads/', '');
+            const featureBranch = copBranch.replace(/_cop$/, '');
+
+            core.info(`_cop branch: ${copBranch}`);
+            core.info(`Feature branch: ${featureBranch}`);
+
+            // Check if PR already exists
+            const { data: existingPrs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${copBranch}`,
+              base: featureBranch,
+              state: 'open',
+            });
+
+            if (existingPrs.length > 0) {
+              const pr = existingPrs[0];
+              core.info(`PR already exists: ${pr.html_url}`);
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: [
+                  '✅ **All checks passed** on `' + copBranch + '`.',
+                  '',
+                  'This PR is ready for review and merge.',
+                ].join('\n'),
+              });
+            } else {
+              const { data: pr } = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `fix: Copilot Auto-Fixes for \`${featureBranch}\``,
+                head: copBranch,
+                base: featureBranch,
+                body: [
+                  '## 🤖 Copilot Auto-Fix PR',
+                  '',
+                  `Automatic code fixes for branch \`${featureBranch}\`.`,
+                  `All checks passed on \`${copBranch}\`.`,
+                  '',
+                  '**Please review and merge when satisfied.**',
+                  '',
+                  '---',
+                  '_Created by the Copilot Autofix CI pipeline._',
+                ].join('\n'),
+              });
+
+              core.info(`PR created: ${pr.html_url}`);
+            }
+
   tf_module_checks_summary:
     needs:
       - terraform_base
       - terraform_security
       - terraform_module_test
+      - copilot_autofix
+      - create_cop_pr
     runs-on: ${{ inputs.runner_type }}
     if: always()
     steps:
@@ -206,6 +320,8 @@ jobs:
           if [[ "${{ inputs.terratest_run_tests }}" == "true" ]]; then
             echo "| 🧪 Terraform Tests | ${{ needs.terraform_module_test.outputs.all_checks_passed == 'true' && '✅ Passed' || needs.terraform_module_test.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           fi
+          echo "| 🤖 Copilot Autofix | ${{ needs.copilot_autofix.outputs.fixes_applied == 'true' && '✅ Fixes applied' || needs.copilot_autofix.result == 'skipped' && '⏭️ Skipped' || '⚠️ No fixes' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📋 _cop PR | ${{ needs.create_cop_pr.result == 'success' && '✅ PR created' || needs.create_cop_pr.result == 'skipped' && '⏭️ Skipped' || '⚠️ Error' }} |" >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
 
           TF_BASE_PASSED="${{ needs.terraform_base.outputs.all_checks_passed == 'true' }}"

@@ -1,19 +1,24 @@
-name: Python Copilot Autofix
+name: Copilot Autofix
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Reusable workflow: Auto-fixes Python findings on a dedicated _cop branch.
+# Reusable workflow: Auto-fixes Python and/or Terraform findings on a
+# dedicated _cop branch.
 #
 # Branch Strategy (_cop):
-#   - Feature PR fails checks → <branch>_cop is created ONCE
+#   - Feature branch fails checks → <branch>_cop is created ONCE
 #   - Fixes are committed on _cop, push triggers CI on _cop again
 #   - Iterates (fix → push → check → fix → ...) until checks pass
 #   - Max iterations controlled by max_copilot_attempts (default: 3)
 #   - NO auto-merge: when checks pass, caller creates PR (_cop → feature)
 #
+# Fix types (can be combined):
+#   - fix_python:    Black, isort, Ruff (deterministic) + Flake8/Copilot (AI)
+#   - fix_terraform: terraform fmt (deterministic) + TFLint/Copilot (AI)
+#
 # Trigger chain:
-#   Feature PR → checks fail → autofix creates _cop, pushes
-#   _cop push  → checks run  → fail → autofix commits more on _cop, pushes
-#   _cop push  → checks run  → pass → PR created (_cop → feature)
+#   Feature branch → checks fail → autofix creates _cop, pushes
+#   _cop push      → checks run  → fail → autofix commits more, pushes
+#   _cop push      → checks run  → pass → PR created (_cop → feature)
 #
 # Iteration control:
 #   - Counts autofix commits on _cop since divergence from feature branch
@@ -28,6 +33,20 @@ on:
         required: false
         default: "ubuntu-latest"
         type: string
+
+      # ── Fix type selection ──────────────────────────────────────────────
+      fix_python:
+        description: "Apply Python auto-fixes (Black, isort, Ruff, Flake8+Copilot)"
+        required: false
+        default: false
+        type: boolean
+      fix_terraform:
+        description: "Apply Terraform auto-fixes (fmt, TFLint+Copilot)"
+        required: false
+        default: false
+        type: boolean
+
+      # ── Python-specific inputs ──────────────────────────────────────────
       python_version:
         description: "Python version"
         default: "3.12"
@@ -48,6 +67,20 @@ on:
         required: false
         default: false
         type: boolean
+      extra_pip_packages:
+        description: "Space-separated extra pip packages to install"
+        default: ""
+        required: false
+        type: string
+
+      # ── Terraform-specific inputs ───────────────────────────────────────
+      tf_version:
+        description: "Terraform version for formatting"
+        default: "latest"
+        required: false
+        type: string
+
+      # ── Common inputs ───────────────────────────────────────────────────
       max_copilot_attempts:
         description: "Maximum number of Copilot fix iterations on _cop branch"
         required: false
@@ -61,11 +94,6 @@ on:
       commit_email:
         description: "Email for autofix commits"
         default: "41898282+github-actions[bot]@users.noreply.github.com"
-        required: false
-        type: string
-      extra_pip_packages:
-        description: "Space-separated extra pip packages to install"
-        default: ""
         required: false
         type: string
 
@@ -154,6 +182,8 @@ jobs:
           echo "📌 Cop branch:      ${COP_BRANCH}"
           echo "📌 Is _cop branch:  ${IS_COP}"
           echo "📌 Iteration:       ${ITERATION} / ${MAX}"
+          echo "📌 Fix Python:      ${{ inputs.fix_python }}"
+          echo "📌 Fix Terraform:   ${{ inputs.fix_terraform }}"
 
   # ── Main autofix job — works on _cop branch ─────────────────────────────
   autofix:
@@ -196,13 +226,56 @@ jobs:
 
           echo "✅ Working on branch: $(git branch --show-current)"
 
+      # ════════════════════════════════════════════════════════════════════
+      # TERRAFORM FIXES
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: Setup Terraform ${{ inputs.tf_version }}
+        if: inputs.fix_terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.tf_version }}
+
+      - name: "TF Phase 1: terraform fmt"
+        id: tf_fmt
+        if: inputs.fix_terraform
+        run: |
+          if terraform fmt -check -recursive >/dev/null 2>&1; then
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+          else
+            terraform fmt -recursive
+            echo "changes=true" >> "$GITHUB_OUTPUT"
+            echo "✅ terraform fmt applied"
+          fi
+
+      - name: "TF Phase 2: Collect TFLint findings"
+        id: tf_lint_check
+        if: inputs.fix_terraform
+        continue-on-error: true
+        run: |
+          if command -v tflint &>/dev/null; then
+            tflint --format compact > /tmp/tflint-findings.txt 2>&1 || true
+            FINDING_COUNT=$(grep -c "Error\|Warning" /tmp/tflint-findings.txt 2>/dev/null || echo "0")
+            echo "finding_count=${FINDING_COUNT}" >> "$GITHUB_OUTPUT"
+            echo "📋 TFLint findings: ${FINDING_COUNT}"
+          else
+            echo "finding_count=0" >> "$GITHUB_OUTPUT"
+            echo "⚠️ TFLint not installed — skipping TFLint analysis"
+          fi
+
+      # ════════════════════════════════════════════════════════════════════
+      # PYTHON FIXES
+      # ════════════════════════════════════════════════════════════════════
+
       - name: Set up Python ${{ inputs.python_version }}
+        if: inputs.fix_python
         uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python_version }}
           cache: pip
 
-      - name: Install tools
+      - name: Install Python tools
+        if: inputs.fix_python
         run: |
           python -m pip install --upgrade pip
           pip install black isort ruff flake8 flake8-json
@@ -216,9 +289,10 @@ jobs:
             pip install -e "${{ inputs.python_source_path }}"
           fi
 
-      # ── Phase 1: Deterministic fixes ────────────────────────────────────
-      - name: "Phase 1a: Black formatting"
+      # ── Python Phase 1: Deterministic fixes ─────────────────────────────
+      - name: "PY Phase 1a: Black formatting"
         id: black
+        if: inputs.fix_python
         working-directory: ${{ inputs.python_source_path }}
         run: |
           if black --check --quiet . 2>/dev/null; then
@@ -229,8 +303,9 @@ jobs:
             echo "✅ Black formatting applied"
           fi
 
-      - name: "Phase 1b: isort import sorting"
+      - name: "PY Phase 1b: isort import sorting"
         id: isort
+        if: inputs.fix_python
         working-directory: ${{ inputs.python_source_path }}
         run: |
           if isort --check-only --quiet . 2>/dev/null; then
@@ -241,8 +316,9 @@ jobs:
             echo "✅ isort applied"
           fi
 
-      - name: "Phase 1c: Ruff auto-fix (safe fixes only)"
+      - name: "PY Phase 1c: Ruff auto-fix (safe fixes only)"
         id: ruff
+        if: inputs.fix_python
         working-directory: ${{ inputs.python_source_path }}
         continue-on-error: true
         run: |
@@ -259,10 +335,10 @@ jobs:
             fi
           fi
 
-      # ── Phase 2: Collect remaining findings for Copilot ─────────────────
-      - name: "Phase 2: Collect remaining flake8 findings"
+      # ── Python Phase 2: Collect remaining findings for Copilot ──────────
+      - name: "PY Phase 2: Collect remaining flake8 findings"
         id: flake8_check
-        if: inputs.copilot_fix_flake8
+        if: inputs.fix_python && inputs.copilot_fix_flake8
         working-directory: ${{ inputs.python_source_path }}
         continue-on-error: true
         run: |
@@ -283,9 +359,9 @@ jobs:
           echo "finding_count=$FINDING_COUNT" >> "$GITHUB_OUTPUT"
           echo "📋 Remaining flake8 findings after deterministic fixes: $FINDING_COUNT"
 
-      - name: "Phase 2: Run tests and capture failures"
+      - name: "PY Phase 2: Run tests and capture failures"
         id: test_check
-        if: inputs.copilot_fix_tests
+        if: inputs.fix_python && inputs.copilot_fix_tests
         working-directory: ${{ inputs.python_source_path }}
         continue-on-error: true
         run: |
@@ -297,10 +373,14 @@ jobs:
             echo "📋 Test failures detected"
           fi
 
-      # ── Phase 3: Copilot-based fixes via GitHub API ─────────────────────
-      - name: "Phase 3: Copilot fix — flake8 findings"
+      # ════════════════════════════════════════════════════════════════════
+      # COPILOT AI-BASED FIXES
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "AI Phase: Copilot fix — flake8 findings"
         id: copilot_flake8
         if: >
+          inputs.fix_python &&
           inputs.copilot_fix_flake8 &&
           steps.flake8_check.outputs.finding_count != '0' &&
           steps.flake8_check.outputs.finding_count != ''
@@ -387,9 +467,10 @@ jobs:
             echo "copilot_changes=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: "Phase 3: Copilot fix — test failures"
+      - name: "AI Phase: Copilot fix — test failures"
         id: copilot_tests
         if: >
+          inputs.fix_python &&
           inputs.copilot_fix_tests &&
           steps.test_check.outputs.tests_pass == 'false'
         env:
@@ -405,8 +486,11 @@ jobs:
 
           echo "copilot_test_changes=false" >> "$GITHUB_OUTPUT"
 
-      # ── Phase 4: Commit fixes on _cop branch & push ─────────────────────
-      - name: "Phase 4: Commit fixes on _cop branch"
+      # ════════════════════════════════════════════════════════════════════
+      # COMMIT & PUSH
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "Commit fixes on _cop branch"
         id: commit
         run: |
           COP_BRANCH="${{ needs.guard.outputs.cop_branch }}"
@@ -420,15 +504,16 @@ jobs:
             exit 0
           fi
 
-          # Build commit message with summary
+          # Build commit message with summary of applied tools
           SUMMARY=""
+          [[ "${{ steps.tf_fmt.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}tf-fmt "
           [[ "${{ steps.black.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}black "
           [[ "${{ steps.isort.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}isort "
           [[ "${{ steps.ruff.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}ruff "
           [[ "${{ steps.copilot_flake8.outputs.copilot_changes }}" == "true" ]] && SUMMARY="${SUMMARY}copilot-flake8 "
 
           git add -A
-          git commit -m "fix: auto-fix Python findings [${SUMMARY% }] (iteration ${NEXT})
+          git commit -m "fix: auto-fix findings [${SUMMARY% }] (iteration ${NEXT})
 
           copilot-autofix: true"
 
@@ -443,7 +528,7 @@ jobs:
           git push origin "HEAD:${COP_BRANCH}"
           echo "✅ Pushed to ${COP_BRANCH} — CI re-triggers automatically"
 
-      # ── Phase 5: Summary ────────────────────────────────────────────────
+      # ── Summary ─────────────────────────────────────────────────────────
       - name: Generate Summary
         if: always()
         run: |
@@ -457,13 +542,22 @@ jobs:
           echo "**_cop branch:** \`${COP_BRANCH}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Feature branch:** \`${FEATURE_BRANCH}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Iteration:** ${ITERATION} / ${MAX}" >> $GITHUB_STEP_SUMMARY
+          echo "**Fix types:** ${{ inputs.fix_python && 'Python' || '' }} ${{ inputs.fix_terraform && 'Terraform' || '' }}" >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '| Phase | Tool | Changes |' >> $GITHUB_STEP_SUMMARY
           echo '|-------|------|---------|' >> $GITHUB_STEP_SUMMARY
-          echo "| Deterministic | Black | ${{ steps.black.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deterministic | isort | ${{ steps.isort.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deterministic | Ruff | ${{ steps.ruff.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| AI-based | Copilot (flake8) | ${{ steps.copilot_flake8.outputs.copilot_changes == 'true' && '✅ Applied' || '⏭️ Clean / Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ inputs.fix_terraform }}" == "true" ]]; then
+            echo "| Deterministic | terraform fmt | ${{ steps.tf_fmt.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ inputs.fix_python }}" == "true" ]]; then
+            echo "| Deterministic | Black | ${{ steps.black.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Deterministic | isort | ${{ steps.isort.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Deterministic | Ruff | ${{ steps.ruff.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| AI-based | Copilot (flake8) | ${{ steps.copilot_flake8.outputs.copilot_changes == 'true' && '✅ Applied' || '⏭️ Clean / Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+
           echo '' >> $GITHUB_STEP_SUMMARY
 
           if [[ "${{ steps.commit.outputs.fixes_applied }}" == "true" ]]; then

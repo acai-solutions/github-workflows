@@ -75,6 +75,21 @@ on:
         default: ""
         required: false
         type: string
+      autofix_include:
+        description: "Whether to run Copilot autofix on _cop branch when checks fail"
+        required: false
+        default: false
+        type: boolean
+      copilot_fix_flake8:
+        description: "Whether Copilot should attempt to fix flake8 findings"
+        required: false
+        default: true
+        type: boolean
+      copilot_fix_tests:
+        description: "Whether Copilot should attempt to fix failing tests"
+        required: false
+        default: false
+        type: boolean
         
     outputs:
       all_steps_passed:
@@ -86,6 +101,12 @@ on:
       python_tests_status:
         description: Python tests pipeline status
         value: ${{ jobs.python_tests.outputs.all_tests_passed }}
+      autofix_applied:
+        description: Whether Copilot autofix was applied
+        value: ${{ jobs.copilot_autofix.outputs.fixes_applied }}
+      cop_branch:
+        description: Name of the _cop branch used for fixes
+        value: ${{ jobs.copilot_autofix.outputs.cop_branch }}
 
 concurrency:
   group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
@@ -123,10 +144,104 @@ jobs:
       extra_pip_packages: ${{ inputs.extra_pip_packages }}
     secrets: inherit
 
+  # ── Optional: Copilot Autofix on _cop branch (only on failure) ──────
+  copilot_autofix:
+    needs:
+      - python_base
+      - python_tests
+    if: |
+      always() &&
+      inputs.autofix_include &&
+      (needs.python_base.outputs.all_steps_passed != 'true' || needs.python_tests.outputs.all_tests_passed != 'true') &&
+      !(needs.python_base.result == 'skipped' && needs.python_tests.result == 'skipped')
+    uses: acai-solutions/github-workflows/.github/workflows/copilot-autofix.yml@py_test
+    with:
+      runner_type: ${{ inputs.runner_type }}
+      fix_python: true
+      python_version: ${{ inputs.python_version }}
+      python_source_path: ${{ inputs.python_source_path }}
+      copilot_fix_flake8: ${{ inputs.copilot_fix_flake8 }}
+      copilot_fix_tests: ${{ inputs.copilot_fix_tests }}
+      commit_user: ${{ inputs.commit_user }}
+      commit_email: ${{ inputs.commit_email }}
+      extra_pip_packages: ${{ inputs.extra_pip_packages }}
+    secrets: inherit
+
+  # ── Create PR from _cop → feature when checks pass on _cop ─────────
+  create_cop_pr:
+    needs:
+      - python_base
+      - python_tests
+    runs-on: ${{ inputs.runner_type }}
+    if: |
+      always() &&
+      inputs.autofix_include &&
+      endsWith(github.ref_name, '_cop') &&
+      (needs.python_base.outputs.all_steps_passed == 'true' || needs.python_base.result == 'skipped') &&
+      (needs.python_tests.outputs.all_tests_passed == 'true' || needs.python_tests.result == 'skipped')
+    steps:
+      - name: "Create PR: _cop → feature branch"
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const copBranch = context.ref.replace('refs/heads/', '');
+            const featureBranch = copBranch.replace(/_cop$/, '');
+
+            core.info(`_cop branch: ${copBranch}`);
+            core.info(`Feature branch: ${featureBranch}`);
+
+            // Check if PR already exists
+            const { data: existingPrs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${copBranch}`,
+              base: featureBranch,
+              state: 'open',
+            });
+
+            if (existingPrs.length > 0) {
+              const pr = existingPrs[0];
+              core.info(`PR already exists: ${pr.html_url}`);
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: [
+                  '✅ **Alle Checks bestanden** auf `' + copBranch + '`.',
+                  '',
+                  'Dieser PR ist bereit zum Review und Merge.',
+                ].join('\n'),
+              });
+            } else {
+              const { data: pr } = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `fix: Copilot Auto-Fixes für \`${featureBranch}\``,
+                head: copBranch,
+                base: featureBranch,
+                body: [
+                  '## 🤖 Copilot Auto-Fix PR',
+                  '',
+                  `Automatische Code-Korrekturen für Branch \`${featureBranch}\`.`,
+                  `Alle Checks sind bestanden auf \`${copBranch}\`.`,
+                  '',
+                  '**Bitte Review durchführen und bei Zufriedenheit mergen.**',
+                  '',
+                  '---',
+                  '_Erstellt durch die Copilot Autofix CI-Pipeline._',
+                ].join('\n'),
+              });
+
+              core.info(`PR created: ${pr.html_url}`);
+            }
+
   py_module_checks_summary:
     needs:
       - python_base
       - python_tests
+      - copilot_autofix
+      - create_cop_pr
     runs-on: ${{ inputs.runner_type }}
     if: always()
     outputs:
@@ -141,6 +256,8 @@ jobs:
           echo '|-----------|--------|' >> $GITHUB_STEP_SUMMARY
           echo "| 🐍 Python Base (Quality) | ${{ needs.python_base.outputs.all_steps_passed == 'true' && '✅ Passed' || needs.python_base.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 🧪 Python Tests | ${{ needs.python_tests.outputs.all_tests_passed == 'true' && '✅ Passed' || needs.python_tests.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🤖 Copilot Autofix | ${{ needs.copilot_autofix.outputs.fixes_applied == 'true' && '✅ Fixes applied' || needs.copilot_autofix.result == 'skipped' && '⏭️ Skipped' || '⚠️ No fixes' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📋 _cop PR | ${{ needs.create_cop_pr.result == 'success' && '✅ PR erstellt' || needs.create_cop_pr.result == 'skipped' && '⏭️ Skipped' || '⚠️ Fehler' }} |" >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
 
           PY_BASE_PASSED="${{ needs.python_base.outputs.all_steps_passed == 'true' || needs.python_base.result == 'skipped' }}"
