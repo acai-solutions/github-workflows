@@ -98,10 +98,10 @@ on:
         type: string
 
     secrets:
-      app_id:
+      GH_RELEASE_APP_ID:
         description: "GitHub App ID for generating tokens that trigger workflows"
         required: true
-      app_private_key:
+      GH_RELEASE_APP_PRIVATE_KEY:
         description: "GitHub App private key (PEM)"
         required: true
 
@@ -207,8 +207,8 @@ jobs:
         id: app_token
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ secrets.app_id }}
-          private-key: ${{ secrets.app_private_key }}
+          app-id: ${{ secrets.GH_RELEASE_APP_ID }}
+          private-key: ${{ secrets.GH_RELEASE_APP_PRIVATE_KEY }}
 
       - name: Checkout Repository
         uses: actions/checkout@v5

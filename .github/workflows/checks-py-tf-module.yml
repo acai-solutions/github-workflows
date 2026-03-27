@@ -275,8 +275,8 @@ jobs:
         id: app_token
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ secrets.app_id }}
-          private-key: ${{ secrets.app_private_key }}
+          app-id: ${{ secrets.GH_RELEASE_APP_ID }}
+          private-key: ${{ secrets.GH_RELEASE_APP_PRIVATE_KEY }}
 
       - name: "Create PR: _cop → feature branch"
         uses: actions/github-script@v7
