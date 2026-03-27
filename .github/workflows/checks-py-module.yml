@@ -53,14 +53,39 @@ on:
         default: python
         required: false
         type: string
+      testing_include:
+        description: Whether to include pytest module tests
+        required: false
+        default: false
+        type: boolean
+      python_source_path:
+        description: Relative path from repo root to the Python package root (where pyproject.toml lives)
+        default: shared/python
+        required: false
+        type: string
+      test_modules:
+        description: >
+          JSON array of module names whose _test/ folders should be exercised.
+          Example: '["logging","storage","xml_parser"]'
+        default: "[]"
+        required: false
+        type: string
+      extra_pip_packages:
+        description: Space-separated pip packages to install for tests
+        default: ""
+        required: false
+        type: string
         
     outputs:
       all_steps_passed:
         description: Indicates if all pipeline steps passed successfully
-        value: ${{ jobs.python_base.outputs.all_steps_passed }}
+        value: ${{ jobs.py_module_checks_summary.outputs.all_passed }}
       python_base_status:
         description: Python base pipeline status
         value: ${{ jobs.python_base.outputs.all_steps_passed }}
+      python_tests_status:
+        description: Python tests pipeline status
+        value: ${{ jobs.python_tests.outputs.all_tests_passed }}
 
 concurrency:
   group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
@@ -87,11 +112,25 @@ jobs:
       python_config_path: ${{ inputs.python_lint_config_path }}
     secrets: inherit
 
+  python_tests:
+    if: ${{ inputs.testing_include && inputs.test_modules != '[]' }}
+    uses: acai-solutions/github-workflows/.github/workflows/python-test.yml@py_test
+    with:
+      runner_type: ${{ inputs.runner_type }}
+      python_version: ${{ inputs.python_version }}
+      python_source_path: ${{ inputs.python_source_path }}
+      test_modules: ${{ inputs.test_modules }}
+      extra_pip_packages: ${{ inputs.extra_pip_packages }}
+    secrets: inherit
+
   py_module_checks_summary:
     needs:
       - python_base
+      - python_tests
     runs-on: ${{ inputs.runner_type }}
     if: always()
+    outputs:
+      all_passed: ${{ steps.status.outputs.all_passed }}
     steps:
       - name: Generate Overall Summary
         run: |
@@ -100,24 +139,38 @@ jobs:
           echo '## Pipeline Results' >> $GITHUB_STEP_SUMMARY
           echo '| Component | Status |' >> $GITHUB_STEP_SUMMARY
           echo '|-----------|--------|' >> $GITHUB_STEP_SUMMARY
-          echo "| 🐍 Python Base (Quality & Tests) | ${{ needs.python_base.outputs.all_steps_passed == 'true' && '✅ Passed' || needs.python_base.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🐍 Python Base (Quality) | ${{ needs.python_base.outputs.all_steps_passed == 'true' && '✅ Passed' || needs.python_base.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧪 Python Tests | ${{ needs.python_tests.outputs.all_tests_passed == 'true' && '✅ Passed' || needs.python_tests.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
 
-          PY_BASE_PASSED="${{ needs.python_base.outputs.all_steps_passed == 'true' }}"
-          if [[ "$PY_BASE_PASSED" == "true" ]]; then
+          PY_BASE_PASSED="${{ needs.python_base.outputs.all_steps_passed == 'true' || needs.python_base.result == 'skipped' }}"
+          PY_TESTS_PASSED="${{ needs.python_tests.outputs.all_tests_passed == 'true' || needs.python_tests.result == 'skipped' }}"
+
+          if [[ "$PY_BASE_PASSED" == "true" && "$PY_TESTS_PASSED" == "true" ]]; then
             echo "**🎉 Overall Result: ✅ All checks passed successfully!**" >> $GITHUB_STEP_SUMMARY
           else
             echo "**⚠️ Overall Result: ❌ Some checks failed. Please review the detailed results above.**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### Failed Components:" >> $GITHUB_STEP_SUMMARY
-            echo "- Python Base (Quality & Tests)" >> $GITHUB_STEP_SUMMARY
+            if [[ "$PY_BASE_PASSED" != "true" ]]; then
+              echo "- Python Base (Quality)" >> $GITHUB_STEP_SUMMARY
+            fi
+            if [[ "$PY_TESTS_PASSED" != "true" ]]; then
+              echo "- Python Tests" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
 
       - name: Check Overall Status
+        id: status
         if: always()
         run: |
-          PY_BASE_PASSED="${{ needs.python_base.outputs.all_steps_passed == 'true' }}"
-          if [[ "$PY_BASE_PASSED" != "true" ]]; then
+          PY_BASE_PASSED="${{ needs.python_base.outputs.all_steps_passed == 'true' || needs.python_base.result == 'skipped' }}"
+          PY_TESTS_PASSED="${{ needs.python_tests.outputs.all_tests_passed == 'true' || needs.python_tests.result == 'skipped' }}"
+
+          if [[ "$PY_BASE_PASSED" == "true" && "$PY_TESTS_PASSED" == "true" ]]; then
+            echo "all_passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "all_passed=false" >> "$GITHUB_OUTPUT"
             echo "::error::Some checks failed. See summary above for details."
             exit 1
           fi
