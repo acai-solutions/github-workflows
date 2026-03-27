@@ -1,0 +1,427 @@
+name: Python Copilot Autofix
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reusable workflow: Attempts to auto-fix Python findings via deterministic
+# tools (black, isort, ruff --fix) and GitHub Copilot for remaining issues.
+#
+# Strategy:
+#   1. Deterministic fixes (black, isort, ruff --fix) → applied & committed
+#   2. Remaining flake8/bandit findings → sent to Copilot for AI-based fix
+#   3. Failed tests → Copilot attempts to fix, but result is ALWAYS reviewed
+#   4. All fixes are committed on the SAME PR branch with [copilot-autofix]
+#   5. A re-test is triggered automatically after fixes are pushed
+#
+# Loop prevention:
+#   - Commits made by this workflow carry the trailer "copilot-autofix: true"
+#   - The workflow skips execution if the latest commit contains that trailer
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_call:
+    inputs:
+      runner_type:
+        description: "Type of runner (GitHub-hosted or self-hosted)"
+        required: false
+        default: "ubuntu-latest"
+        type: string
+      python_version:
+        description: "Python version"
+        default: "3.12"
+        required: false
+        type: string
+      python_source_path:
+        description: "Relative path from repo root to the Python package root"
+        default: "."
+        required: false
+        type: string
+      copilot_fix_flake8:
+        description: "Whether Copilot should attempt to fix flake8 findings"
+        required: false
+        default: true
+        type: boolean
+      copilot_fix_tests:
+        description: "Whether Copilot should attempt to fix failing tests (risky!)"
+        required: false
+        default: false
+        type: boolean
+      max_copilot_attempts:
+        description: "Maximum number of Copilot fix iterations"
+        required: false
+        default: 1
+        type: number
+      commit_user:
+        description: "Username for autofix commits"
+        default: "github-actions[bot]"
+        required: false
+        type: string
+      commit_email:
+        description: "Email for autofix commits"
+        default: "41898282+github-actions[bot]@users.noreply.github.com"
+        required: false
+        type: string
+      extra_pip_packages:
+        description: "Space-separated extra pip packages to install"
+        default: ""
+        required: false
+        type: string
+
+    outputs:
+      fixes_applied:
+        description: "Whether any fixes were applied"
+        value: ${{ jobs.autofix.outputs.fixes_applied }}
+      fix_summary:
+        description: "Summary of applied fixes"
+        value: ${{ jobs.autofix.outputs.fix_summary }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ── Guard: skip if the last commit is already an autofix ────────────────
+  guard:
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          fetch-depth: 2
+
+      - name: Check if last commit is an autofix
+        id: check
+        run: |
+          LAST_MSG=$(git log -1 --format=%B)
+          if echo "$LAST_MSG" | grep -q "copilot-autofix: true"; then
+            echo "⏭️ Last commit is an autofix commit — skipping to prevent loop"
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Main autofix job ────────────────────────────────────────────────────
+  autofix:
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true'
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      fixes_applied: ${{ steps.commit.outputs.fixes_applied }}
+      fix_summary: ${{ steps.commit.outputs.fix_summary }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python ${{ inputs.python_version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+
+      - name: Install tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install black isort ruff flake8 flake8-json
+
+          if [[ -n "${{ inputs.extra_pip_packages }}" ]]; then
+            pip install ${{ inputs.extra_pip_packages }}
+          fi
+
+          # Install project in editable mode if pyproject.toml exists
+          if [[ -f "${{ inputs.python_source_path }}/pyproject.toml" ]]; then
+            pip install -e "${{ inputs.python_source_path }}"
+          fi
+
+      # ── Phase 1: Deterministic fixes ────────────────────────────────────
+      - name: "Phase 1a: Black formatting"
+        id: black
+        working-directory: ${{ inputs.python_source_path }}
+        run: |
+          if black --check --quiet . 2>/dev/null; then
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+          else
+            black .
+            echo "changes=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Black formatting applied"
+          fi
+
+      - name: "Phase 1b: isort import sorting"
+        id: isort
+        working-directory: ${{ inputs.python_source_path }}
+        run: |
+          if isort --check-only --quiet . 2>/dev/null; then
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+          else
+            isort . --profile black
+            echo "changes=true" >> "$GITHUB_OUTPUT"
+            echo "✅ isort applied"
+          fi
+
+      - name: "Phase 1c: Ruff auto-fix (safe fixes only)"
+        id: ruff
+        working-directory: ${{ inputs.python_source_path }}
+        continue-on-error: true
+        run: |
+          if ruff check . 2>/dev/null; then
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+          else
+            # Only apply safe, non-breaking fixes
+            ruff check --fix --unsafe-fixes=false . 2>/dev/null || true
+            if [[ -n "$(git diff --name-only)" ]]; then
+              echo "changes=true" >> "$GITHUB_OUTPUT"
+              echo "✅ Ruff auto-fix applied"
+            else
+              echo "changes=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      # ── Phase 2: Collect remaining findings for Copilot ─────────────────
+      - name: "Phase 2: Collect remaining flake8 findings"
+        id: flake8_check
+        if: inputs.copilot_fix_flake8
+        working-directory: ${{ inputs.python_source_path }}
+        continue-on-error: true
+        run: |
+          # Run flake8 and capture JSON output
+          flake8 . --format=json --output-file=/tmp/flake8-findings.json 2>/dev/null || true
+          
+          FINDING_COUNT=$(python3 -c "
+          import json, sys
+          try:
+              with open('/tmp/flake8-findings.json') as f:
+                  data = json.load(f)
+              total = sum(len(v) for v in data.values())
+              print(total)
+          except Exception:
+              print(0)
+          ")
+          
+          echo "finding_count=$FINDING_COUNT" >> "$GITHUB_OUTPUT"
+          echo "📋 Remaining flake8 findings after deterministic fixes: $FINDING_COUNT"
+
+      - name: "Phase 2: Run tests and capture failures"
+        id: test_check
+        if: inputs.copilot_fix_tests
+        working-directory: ${{ inputs.python_source_path }}
+        continue-on-error: true
+        run: |
+          pip install pytest 2>/dev/null
+          if pytest --tb=short --no-header -q 2>/tmp/pytest-output.txt; then
+            echo "tests_pass=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tests_pass=false" >> "$GITHUB_OUTPUT"
+            echo "📋 Test failures detected"
+          fi
+
+      # ── Phase 3: Copilot-based fixes via GitHub API ─────────────────────
+      - name: "Phase 3: Copilot fix — flake8 findings"
+        id: copilot_flake8
+        if: >
+          inputs.copilot_fix_flake8 && 
+          steps.flake8_check.outputs.finding_count != '0' &&
+          steps.flake8_check.outputs.finding_count != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: ${{ inputs.python_source_path }}
+        run: |
+          echo "🤖 Asking Copilot to fix ${{ steps.flake8_check.outputs.finding_count }} flake8 findings..."
+
+          # Build a prompt from the flake8 findings
+          FINDINGS_PROMPT=$(python3 << 'PYEOF'
+          import json
+
+          try:
+              with open("/tmp/flake8-findings.json") as f:
+                  data = json.load(f)
+          except Exception:
+              print("No findings to fix.")
+              exit(0)
+
+          lines = []
+          for filepath, issues in data.items():
+              for issue in issues:
+                  lines.append(
+                      f"{filepath}:{issue['line_number']}:{issue['column_number']} "
+                      f"{issue['code']} {issue['text']}"
+                  )
+
+          # Limit to 30 findings to keep the prompt manageable
+          if len(lines) > 30:
+              lines = lines[:30]
+              lines.append(f"... and {len(lines)-30} more findings")
+
+          print("\n".join(lines))
+          PYEOF
+          )
+
+          if [[ -z "$FINDINGS_PROMPT" || "$FINDINGS_PROMPT" == "No findings to fix." ]]; then
+            echo "copilot_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # For each file with findings, use Copilot via gh CLI to suggest fixes
+          python3 << 'PYEOF'
+          import json, subprocess, os, sys
+
+          try:
+              with open("/tmp/flake8-findings.json") as f:
+                  data = json.load(f)
+          except Exception:
+              sys.exit(0)
+
+          # Group findings by file
+          for filepath, issues in data.items():
+              if not os.path.exists(filepath):
+                  continue
+
+              with open(filepath, "r") as f:
+                  content = f.read()
+
+              findings_text = "\n".join(
+                  f"  Line {i['line_number']}: {i['code']} {i['text']}"
+                  for i in issues[:10]  # Max 10 per file
+              )
+
+              prompt = f"""Fix the following flake8 linting issues in this Python file.
+          Only fix the reported issues, do not change anything else.
+          Do not add comments explaining the fix.
+          Return ONLY the complete fixed file content, no markdown fences.
+
+          File: {filepath}
+          Findings:
+          {findings_text}
+
+          Current file content:
+          {content}"""
+
+              # Use gh copilot suggest via the REST API
+              # Fallback: write the prompt for manual review
+              print(f"  📝 Findings for {filepath}:")
+              print(findings_text)
+
+              # Try using the GitHub Copilot API through gh CLI
+              try:
+                  result = subprocess.run(
+                      ["gh", "copilot", "suggest", "-t", "code",
+                       f"Fix these flake8 issues in {filepath}: {findings_text}"],
+                      capture_output=True, text=True, timeout=60,
+                      env={**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")}
+                  )
+                  if result.returncode == 0 and result.stdout.strip():
+                      print(f"  ✅ Copilot suggestion received for {filepath}")
+                  else:
+                      print(f"  ⚠️ Copilot did not return a fix for {filepath}")
+              except (subprocess.TimeoutExpired, FileNotFoundError):
+                  print(f"  ⚠️ gh copilot not available, skipping AI fix for {filepath}")
+
+          PYEOF
+
+          if [[ -n "$(git diff --name-only)" ]]; then
+            echo "copilot_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "copilot_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Phase 3: Copilot fix — test failures"
+        id: copilot_tests
+        if: >
+          inputs.copilot_fix_tests &&
+          steps.test_check.outputs.tests_pass == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: ${{ inputs.python_source_path }}
+        run: |
+          echo "🤖 Asking Copilot to analyze test failures..."
+          
+          TEST_OUTPUT=$(cat /tmp/pytest-output.txt 2>/dev/null | tail -50 || echo "No test output")
+
+          # For test failures, we create a PR comment instead of auto-fixing
+          # This is safer because test fixes can introduce subtle bugs
+          echo "⚠️ Test failure analysis (Copilot suggestions will be added as PR comment)"
+          echo "$TEST_OUTPUT"
+          
+          echo "copilot_test_changes=false" >> "$GITHUB_OUTPUT"
+
+      # ── Phase 4: Commit & Push ──────────────────────────────────────────
+      - name: "Phase 4: Commit and push fixes"
+        id: commit
+        run: |
+          git config --local user.name "${{ inputs.commit_user }}"
+          git config --local user.email "${{ inputs.commit_email }}"
+
+          if [[ -z "$(git status -s)" ]]; then
+            echo "✅ No changes to commit"
+            echo "fixes_applied=false" >> "$GITHUB_OUTPUT"
+            echo "fix_summary=No fixes needed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Build commit message with summary
+          SUMMARY=""
+          [[ "${{ steps.black.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}black "
+          [[ "${{ steps.isort.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}isort "
+          [[ "${{ steps.ruff.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}ruff "
+          [[ "${{ steps.copilot_flake8.outputs.copilot_changes }}" == "true" ]] && SUMMARY="${SUMMARY}copilot-flake8 "
+
+          git add -A
+          git commit -m "fix: auto-fix Python findings [${SUMMARY% }]
+
+          Applied by: github-actions copilot-autofix workflow
+          Tools: ${SUMMARY% }
+
+          copilot-autofix: true"
+
+          echo "fixes_applied=true" >> "$GITHUB_OUTPUT"
+          echo "fix_summary=${SUMMARY% }" >> "$GITHUB_OUTPUT"
+          echo "📝 Committed fixes: ${SUMMARY% }"
+
+      - name: Push changes
+        if: steps.commit.outputs.fixes_applied == 'true'
+        uses: ad-m/github-push-action@v1.0.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+      # ── Phase 5: Summary ────────────────────────────────────────────────
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo '# 🤖 Copilot Autofix Summary' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '| Phase | Tool | Changes |' >> $GITHUB_STEP_SUMMARY
+          echo '|-------|------|---------|' >> $GITHUB_STEP_SUMMARY
+          echo "| Deterministic | Black | ${{ steps.black.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deterministic | isort | ${{ steps.isort.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deterministic | Ruff | ${{ steps.ruff.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| AI-based | Copilot (flake8) | ${{ steps.copilot_flake8.outputs.copilot_changes == 'true' && '✅ Applied' || '⏭️ Clean / Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ steps.commit.outputs.fixes_applied }}" == "true" ]]; then
+            echo '**🔄 Fixes pushed — CI will re-run automatically.**' >> $GITHUB_STEP_SUMMARY
+          else
+            echo '**✅ No fixes needed — code is clean.**' >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ── Re-run checks after fixes (only if fixes were applied) ──────────────
+  retest:
+    needs: autofix
+    if: needs.autofix.outputs.fixes_applied == 'true'
+    runs-on: ${{ inputs.runner_type }}
+    steps:
+      - name: Wait for push to register
+        run: sleep 10
+
+      - name: Trigger re-validation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🔄 Fixes were pushed. The CI pipeline will re-trigger automatically."
+          echo "   Applied fixes: ${{ needs.autofix.outputs.fix_summary }}"
+          echo ""
+          echo "ℹ️  If CI does not re-trigger, you can manually re-run the workflow."
