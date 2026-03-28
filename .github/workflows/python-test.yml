@@ -131,9 +131,17 @@ jobs:
       - name: Evaluate test results
         id: check
         run: |
-          if [[ "${{ needs.pytest_module.result }}" == "success" ]]; then
+          RESULT="${{ needs.pytest_module.result }}"
+
+          if [[ "${RESULT}" == "success" ]]; then
             echo "passed=true" >> "$GITHUB_OUTPUT"
             echo "✅ All module tests passed"
+          elif [[ "${RESULT}" == "cancelled" ]]; then
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            echo "⚠️ Tests were cancelled (likely by concurrency group) — skipping gate"
+            # Exit 0: don't fail the gate for cancellations, the whole
+            # workflow is being superseded by a newer run anyway.
+            exit 0
           else
             echo "passed=false" >> "$GITHUB_OUTPUT"
             echo "::error::One or more module tests failed"
