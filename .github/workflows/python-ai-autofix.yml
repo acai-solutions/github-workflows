@@ -384,6 +384,7 @@ jobs:
         with:
           prompt_file: "/tmp/claude-fix-prompt.txt"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app_token.outputs.token }}
           claude_args: >
             --max-turns 30
             --model claude-sonnet-4-20250514
