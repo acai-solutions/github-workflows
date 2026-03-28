@@ -528,9 +528,17 @@ jobs:
               mode, findings_path, source_root = sys.argv[1], sys.argv[2], sys.argv[3]
 
               token = os.environ.get("ANTHROPIC_API_KEY", "")
+              print(f"🔑 ANTHROPIC_API_KEY present: {bool(token)} (length: {len(token)})")
               if not token:
-                  print("⚠️  No ANTHROPIC_API_KEY set — skipping AI fixes")
+                  print("❌ ANTHROPIC_API_KEY is empty — cannot call Claude API")
+                  print("   Ensure the secret exists in repo/org and secrets: inherit is used")
+                  sys.exit(1)
+
+              if not os.path.exists(findings_path):
+                  print(f"⚠️  Findings file not found: {findings_path}")
                   sys.exit(0)
+              print(f"📄 Findings file: {findings_path} ({os.path.getsize(findings_path)} bytes)")
+              print(f"📂 Source root: {source_root} (exists: {os.path.isdir(source_root)})")
 
               fixes = {"flake8": fix_flake8, "bandit": fix_bandit, "tests": fix_tests}
               fn = fixes.get(mode)
@@ -539,7 +547,7 @@ jobs:
                   sys.exit(1)
 
               count = fn(findings_path, source_root, token)
-              print(f"\n🤖 Copilot {mode} fix: {count} file(s) modified")
+              print(f"\n🤖 Claude {mode} fix: {count} file(s) modified")
 
           if __name__ == "__main__":
               main()
