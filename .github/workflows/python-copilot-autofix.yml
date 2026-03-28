@@ -72,10 +72,10 @@ on:
     outputs:
       fixes_applied:
         description: "Whether fixes were pushed to _cop branch"
-        value: ${{ jobs.autofix.outputs.fixes_applied }}
+        value: ${{ jobs.python_autofix.outputs.fixes_applied }}
       fix_summary:
         description: "Summary of applied fixes"
-        value: ${{ jobs.autofix.outputs.fix_summary }}
+        value: ${{ jobs.python_autofix.outputs.fix_summary }}
       cop_branch:
         description: "Name of the _cop branch"
         value: ${{ jobs.guard.outputs.cop_branch }}
@@ -156,7 +156,7 @@ jobs:
           echo "📌 Iteration:       ${ITERATION} / ${MAX}"
 
   # ── Main autofix job — works on _cop branch ─────────────────────────────
-  autofix:
+  python_autofix:
     needs: guard
     if: needs.guard.outputs.should_run == 'true'
     runs-on: ${{ inputs.runner_type }}
