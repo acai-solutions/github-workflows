@@ -119,14 +119,14 @@ on:
         required: false
         type: string
 
-      # Copilot Autofix inputs
+      # Terraform AI Autofix inputs
       autofix_include:
-        description: "Whether to run Copilot autofix on _cop branch when checks fail"
+        description: "Whether to run terraform-ai-autofix on _cop branch when checks fail"
         required: false
         default: false
         type: boolean
       max_copilot_attempts:
-        description: "Maximum number of Copilot fix iterations on _cop branch"
+        description: "Maximum number of terraform-ai-autofix fix iterations on _cop branch"
         required: false
         default: 3
         type: number
@@ -147,11 +147,11 @@ on:
         description: Security checks status
         value: ${{ jobs.terraform_security.outputs.all_checks_passed }}
       autofix_applied:
-        description: Whether Copilot autofix was applied
-        value: ${{ jobs.copilot_autofix.outputs.fixes_applied }}
+        description: Whether terraform-ai-autofix was applied
+        value: ${{ jobs.terraform_ai_autofix.outputs.fixes_applied }}
       cop_branch:
         description: Name of the _cop branch used for fixes
-        value: ${{ jobs.copilot_autofix.outputs.cop_branch }}
+        value: ${{ jobs.terraform_ai_autofix.outputs.cop_branch }}
 
 # Replace scalar with object to namespace and optionally cancel prior runs
 concurrency:
@@ -202,8 +202,8 @@ jobs:
       test_bed_aws_esc_terratest_config: ${{ inputs.test_bed_aws_esc_terratest_config }}
     secrets: inherit
       
-  # ── Optional: Copilot Autofix on _cop branch (only on failure) ──────
-  copilot_autofix:
+  # ── Optional: Terraform AI Autofix on _cop branch (only on failure) ──────
+  terraform_ai_autofix:
     needs:
       - terraform_base
       - terraform_security
@@ -215,7 +215,7 @@ jobs:
        needs.terraform_security.outputs.all_checks_passed != 'true' ||
        (needs.terraform_module_test.result != 'skipped' && needs.terraform_module_test.outputs.all_checks_passed != 'true')) &&
       !(needs.terraform_base.result == 'skipped' && needs.terraform_security.result == 'skipped' && needs.terraform_module_test.result == 'skipped')
-    uses: acai-solutions/github-workflows/.github/workflows/copilot-autofix.yml@py_test
+    uses: acai-solutions/github-workflows/.github/workflows/terraform-ai-autofix.yml@py_test
     with:
       runner_type: ${{ inputs.runner_type }}
       fix_terraform: true
@@ -328,7 +328,7 @@ jobs:
           if [[ "${{ inputs.terratest_run_tests }}" == "true" ]]; then
             echo "| 🧪 Terraform Tests | ${{ needs.terraform_module_test.outputs.all_checks_passed == 'true' && '✅ Passed' || needs.terraform_module_test.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "| 🤖 Copilot Autofix | ${{ needs.copilot_autofix.outputs.fixes_applied == 'true' && '✅ Fixes applied' || needs.copilot_autofix.result == 'skipped' && '⏭️ Skipped' || '⚠️ No fixes' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🤖 terraform-ai-autofix | ${{ needs.terraform_ai_autofix.outputs.fixes_applied == 'true' && '✅ Fixes applied' || needs.terraform_ai_autofix.result == 'skipped' && '⏭️ Skipped' || '⚠️ No fixes' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 📋 _cop PR | ${{ needs.create_cop_pr.result == 'success' && '✅ PR created' || needs.create_cop_pr.result == 'skipped' && '⏭️ Skipped' || '⚠️ Error' }} |" >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
 

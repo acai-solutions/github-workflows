@@ -1,0 +1,460 @@
+name: Python Autofix (Claude Code)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reusable workflow: Auto-fixes Python findings on a dedicated _cop branch
+# using Claude Code (anthropics/claude-code-action).
+#
+# Claude Code runs as a full agent with shell access — it reads files,
+# runs flake8/bandit/pytest, makes surgical edits, and verifies fixes.
+#
+# Branch Strategy (_cop):
+#   - Feature branch fails checks → <branch>_cop is created ONCE
+#   - Fixes are committed on _cop, push triggers CI on _cop again
+#   - Iterates (fix → push → check → fix → ...) until checks pass
+#   - Max iterations controlled by max_copilot_attempts (default: 3)
+#   - NO auto-merge: when checks pass, caller creates PR (_cop → feature)
+#
+# Fix types:
+#   - Flake8 linting (unused imports, complexity, naming, etc.)
+#   - Bandit security findings
+#   - Test failures (source code fixes, not weakening tests)
+#   - Black/isort/Ruff are already handled by python-base.yml
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_call:
+    inputs:
+      runner_type:
+        description: "Type of runner (GitHub-hosted or self-hosted)"
+        required: false
+        default: "ubuntu-latest"
+        type: string
+      python_version:
+        description: "Python version"
+        default: "3.12"
+        required: false
+        type: string
+      python_source_path:
+        description: "Relative path from repo root to the Python package root"
+        default: "."
+        required: false
+        type: string
+      copilot_fix_flake8:
+        description: "Whether Claude should fix flake8 findings"
+        required: false
+        default: true
+        type: boolean
+      copilot_fix_bandit:
+        description: "Whether Claude should fix bandit findings"
+        required: false
+        default: true
+        type: boolean
+      copilot_fix_tests:
+        description: "Whether Claude should fix failing tests"
+        required: false
+        default: false
+        type: boolean
+      test_modules:
+        description: >
+          JSON array of module names whose _test/ folders should be exercised.
+          Required when copilot_fix_tests is true.
+          Example: '["logging","storage","xml_parser"]'
+        default: "[]"
+        required: false
+        type: string
+      extra_pip_packages:
+        description: "Space-separated extra pip packages to install"
+        default: ""
+        required: false
+        type: string
+      gh_wf_config_repo:
+        description: "Public repo where linting config is stored"
+        default: "acai-solutions/github-workflow-configs"
+        required: false
+        type: string
+      gh_wf_config_repo_ref:
+        description: "Ref or branch of gh_wf_config_repo"
+        default: "main"
+        required: false
+        type: string
+      python_config_path:
+        description: "Path to python config in gh_wf_config_repo (e.g. 'python')"
+        default: "python"
+        required: false
+        type: string
+      max_copilot_attempts:
+        description: "Maximum number of fix iterations on _cop branch"
+        required: false
+        default: 3
+        type: number
+      commit_user:
+        description: "Username for autofix commits"
+        default: "github-actions[bot]"
+        required: false
+        type: string
+      commit_email:
+        description: "Email for autofix commits"
+        default: "41898282+github-actions[bot]@users.noreply.github.com"
+        required: false
+        type: string
+
+    secrets:
+      GH_RELEASE_APP_ID:
+        description: "GitHub App ID for generating tokens that trigger workflows"
+        required: true
+      GH_RELEASE_APP_PRIVATE_KEY:
+        description: "GitHub App private key (PEM)"
+        required: true
+      ANTHROPIC_API_KEY:
+        description: "Anthropic API key for Claude Code"
+        required: true
+
+    outputs:
+      fixes_applied:
+        description: "Whether fixes were pushed to _cop branch"
+        value: ${{ jobs.autofix.outputs.fixes_applied }}
+      fix_summary:
+        description: "Summary of applied fixes"
+        value: ${{ jobs.autofix.outputs.fix_summary }}
+      cop_branch:
+        description: "Name of the _cop branch"
+        value: ${{ jobs.guard.outputs.cop_branch }}
+      feature_branch:
+        description: "Name of the feature branch"
+        value: ${{ jobs.guard.outputs.feature_branch }}
+      iteration:
+        description: "Current iteration count after this run"
+        value: ${{ jobs.guard.outputs.iteration }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ── Guard: detect branch context and check iteration limit ──────────────
+  guard:
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      should_run: ${{ steps.detect.outputs.should_run }}
+      is_cop_branch: ${{ steps.detect.outputs.is_cop_branch }}
+      current_branch: ${{ steps.detect.outputs.current_branch }}
+      cop_branch: ${{ steps.detect.outputs.cop_branch }}
+      feature_branch: ${{ steps.detect.outputs.feature_branch }}
+      iteration: ${{ steps.detect.outputs.iteration }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Detect branch context and iteration count
+        id: detect
+        run: |
+          CURRENT_BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
+
+          if [[ "${CURRENT_BRANCH}" == *_cop ]]; then
+            IS_COP=true
+            FEATURE_BRANCH="${CURRENT_BRANCH%_cop}"
+            COP_BRANCH="${CURRENT_BRANCH}"
+          else
+            IS_COP=false
+            FEATURE_BRANCH="${CURRENT_BRANCH}"
+            COP_BRANCH="${CURRENT_BRANCH}_cop"
+          fi
+
+          echo "current_branch=${CURRENT_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "is_cop_branch=${IS_COP}" >> "$GITHUB_OUTPUT"
+          echo "feature_branch=${FEATURE_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "cop_branch=${COP_BRANCH}" >> "$GITHUB_OUTPUT"
+
+          ITERATION=0
+          if [[ "${IS_COP}" == "true" ]]; then
+            git fetch origin "${FEATURE_BRANCH}" 2>/dev/null || true
+            DIVERGE=$(git merge-base HEAD "origin/${FEATURE_BRANCH}" 2>/dev/null || echo "")
+            if [[ -n "${DIVERGE}" ]]; then
+              ITERATION=$(git log --oneline "${DIVERGE}..HEAD" --grep="copilot-autofix: true" | wc -l | tr -d ' ')
+            fi
+          fi
+
+          echo "iteration=${ITERATION}" >> "$GITHUB_OUTPUT"
+
+          MAX=${{ inputs.max_copilot_attempts }}
+          if [[ "${ITERATION}" -ge "${MAX}" ]]; then
+            echo "🛑 Max iterations (${MAX}) reached on ${COP_BRANCH} — stopping"
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "📌 Current branch:  ${CURRENT_BRANCH}"
+          echo "📌 Feature branch:  ${FEATURE_BRANCH}"
+          echo "📌 Cop branch:      ${COP_BRANCH}"
+          echo "📌 Is _cop branch:  ${IS_COP}"
+          echo "📌 Iteration:       ${ITERATION} / ${MAX}"
+
+  # ── Main autofix job ────────────────────────────────────────────────────
+  autofix:
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true'
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      fixes_applied: ${{ steps.commit.outputs.fixes_applied }}
+      fix_summary: ${{ steps.commit.outputs.fix_summary }}
+
+    steps:
+      - name: Generate GitHub App Token
+        id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_RELEASE_APP_ID }}
+          private-key: ${{ secrets.GH_RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.guard.outputs.current_branch }}
+          token: ${{ steps.app_token.outputs.token }}
+          fetch-depth: 0
+
+      - name: "Setup _cop branch"
+        run: |
+          IS_COP="${{ needs.guard.outputs.is_cop_branch }}"
+          COP_BRANCH="${{ needs.guard.outputs.cop_branch }}"
+
+          git config --local user.name "${{ inputs.commit_user }}"
+          git config --local user.email "${{ inputs.commit_email }}"
+
+          if [[ "${IS_COP}" == "true" ]]; then
+            echo "🔄 Already on _cop branch — continuing with fixes"
+          else
+            git fetch origin
+            if git ls-remote --exit-code --heads origin "${COP_BRANCH}" >/dev/null 2>&1; then
+              echo "🔄 _cop branch exists remotely — checking out"
+              git checkout -b "${COP_BRANCH}" "origin/${COP_BRANCH}"
+            else
+              echo "🆕 Creating new _cop branch: ${COP_BRANCH}"
+              git checkout -b "${COP_BRANCH}"
+            fi
+          fi
+
+          echo "✅ Working on branch: $(git branch --show-current)"
+
+      # ── Python environment setup ────────────────────────────────────────
+
+      - name: Set up Python ${{ inputs.python_version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+
+      - name: Install Python tools and project
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 bandit
+
+          if [[ -n "${{ inputs.extra_pip_packages }}" ]]; then
+            pip install ${{ inputs.extra_pip_packages }}
+          fi
+
+          if [[ -f "${{ inputs.python_source_path }}/pyproject.toml" ]]; then
+            pip install -e "${{ inputs.python_source_path }}"
+          fi
+
+          if [[ "${{ inputs.copilot_fix_tests }}" == "true" ]]; then
+            pip install pytest pytest-cov
+          fi
+
+      - name: "Fetch flake8 config"
+        if: inputs.copilot_fix_flake8
+        run: |
+          SOURCE_PATH="${{ inputs.python_source_path }}"
+
+          if [[ -f ".flake8" ]]; then
+            echo "✅ Using local .flake8"
+          else
+            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github.v3.raw" \
+              "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.python_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
+            HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n 1)
+            CONTENT=$(echo "$HTTP_RESPONSE" | head -n -1)
+
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              echo "$CONTENT" > .flake8
+              echo "✅ Downloaded .flake8 from central config repo"
+            fi
+          fi
+
+          if [[ -f ".flake8" && "${SOURCE_PATH}" != "." ]]; then
+            cp .flake8 "${SOURCE_PATH}/.flake8"
+          fi
+
+      # ── Claude Code agent fix ───────────────────────────────────────────
+
+      - name: "Build Claude Code fix prompt"
+        id: build_prompt
+        run: |
+          SOURCE_PATH="${{ inputs.python_source_path }}"
+          PROMPT="You are fixing Python code quality and security issues in this repository."
+          PROMPT="${PROMPT}\nWorking directory: ${SOURCE_PATH}"
+          PROMPT="${PROMPT}\n"
+
+          HAS_WORK=false
+
+          if [[ "${{ inputs.copilot_fix_flake8 }}" == "true" ]]; then
+            PROMPT="${PROMPT}\n## Flake8 Linting Fixes"
+            PROMPT="${PROMPT}\n1. cd ${SOURCE_PATH} && run: flake8 . --format=default"
+            PROMPT="${PROMPT}\n2. For each finding, edit the source file to fix the issue."
+            PROMPT="${PROMPT}\n3. After fixing, re-run flake8 to verify no new issues were introduced."
+            PROMPT="${PROMPT}\n4. Common fixes: remove unused imports (F401), remove unused variables (F841),"
+            PROMPT="${PROMPT}\n   replace lambda assignments with def (E731), rename ambiguous variables (E741),"
+            PROMPT="${PROMPT}\n   reduce function complexity by extracting helper functions (C901)."
+            PROMPT="${PROMPT}\n"
+            HAS_WORK=true
+          fi
+
+          if [[ "${{ inputs.copilot_fix_bandit }}" == "true" ]]; then
+            PROMPT="${PROMPT}\n## Bandit Security Fixes"
+            PROMPT="${PROMPT}\n1. cd ${SOURCE_PATH} && run: bandit -r . -f txt"
+            PROMPT="${PROMPT}\n2. Fix security findings where possible without changing the code's behavior."
+            PROMPT="${PROMPT}\n3. For hardcoded passwords/keys: use environment variables or config files."
+            PROMPT="${PROMPT}\n4. For unsafe functions: replace with safe alternatives."
+            PROMPT="${PROMPT}\n5. If a finding is a false positive (e.g. test fixtures, documentation),"
+            PROMPT="${PROMPT}\n   add a # nosec comment with the test ID (e.g. # nosec B101)."
+            PROMPT="${PROMPT}\n6. After fixing, re-run bandit to verify findings are resolved."
+            PROMPT="${PROMPT}\n"
+            HAS_WORK=true
+          fi
+
+          if [[ "${{ inputs.copilot_fix_tests }}" == "true" ]]; then
+            TEST_MODULES='${{ inputs.test_modules }}'
+            PROMPT="${PROMPT}\n## Test Failure Fixes"
+            PROMPT="${PROMPT}\n1. cd ${SOURCE_PATH} && run pytest to identify failures."
+
+            if [[ "${TEST_MODULES}" != "[]" ]]; then
+              PKG=$(cd "${SOURCE_PATH}" && python3 -c "
+          try:
+              import tomllib
+          except ImportError:
+              import tomli as tomllib
+          with open('pyproject.toml','rb') as f:
+              cfg = tomllib.load(f)
+          print(cfg['project']['name'])
+          " 2>/dev/null || echo "")
+
+              if [[ -n "${PKG}" ]]; then
+                PROMPT="${PROMPT}\n   Run tests per module:"
+                for MODULE in $(echo "${TEST_MODULES}" | python3 -c "import json,sys; [print(m) for m in json.load(sys.stdin)]"); do
+                  PROMPT="${PROMPT}\n   - pytest ${PKG}/${MODULE}/_test/ -v --tb=long"
+                done
+              fi
+            fi
+
+            PROMPT="${PROMPT}\n2. Fix the SOURCE CODE to make failing tests pass."
+            PROMPT="${PROMPT}\n3. If a test file has obvious bugs (wrong imports, typos), fix those too."
+            PROMPT="${PROMPT}\n4. Do NOT weaken, remove, or skip test assertions."
+            PROMPT="${PROMPT}\n5. After fixing, re-run the failing tests to verify they pass."
+            PROMPT="${PROMPT}\n"
+            HAS_WORK=true
+          fi
+
+          PROMPT="${PROMPT}\n## Important Rules"
+          PROMPT="${PROMPT}\n- Only edit files under ${SOURCE_PATH}/"
+          PROMPT="${PROMPT}\n- Do NOT add comments explaining your changes."
+          PROMPT="${PROMPT}\n- Do NOT modify .flake8, pyproject.toml, or configuration files."
+          PROMPT="${PROMPT}\n- Do NOT commit anything — just edit the files."
+          PROMPT="${PROMPT}\n- Preserve existing code structure, docstrings, and formatting style."
+
+          echo -e "${PROMPT}" > /tmp/claude-fix-prompt.txt
+          echo "has_work=${HAS_WORK}" >> "$GITHUB_OUTPUT"
+          echo "📋 Claude Code prompt:"
+          cat /tmp/claude-fix-prompt.txt
+
+      - name: "🤖 Claude Code: Fix Python findings"
+        id: claude_fix
+        if: steps.build_prompt.outputs.has_work == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          prompt_file: "/tmp/claude-fix-prompt.txt"
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: >
+            --max-turns 30
+            --model claude-sonnet-4-20250514
+            --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,LS,Bash(flake8:*),Bash(bandit:*),Bash(pytest:*),Bash(python:*),Bash(pip:*),Bash(cd:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(find:*),Bash(ls:*)"
+          track_progress: false
+
+      # ── Clean up, commit, push ──────────────────────────────────────────
+
+      - name: "Clean up copied config files"
+        run: |
+          SOURCE_PATH="${{ inputs.python_source_path }}"
+          if [[ "${SOURCE_PATH}" != "." && -f "${SOURCE_PATH}/.flake8" ]]; then
+            if ! git show HEAD:"${SOURCE_PATH}/.flake8" &>/dev/null 2>&1; then
+              rm -f "${SOURCE_PATH}/.flake8"
+              echo "🧹 Removed copied .flake8 from ${SOURCE_PATH}/"
+            fi
+          fi
+
+      - name: "Commit fixes on _cop branch"
+        id: commit
+        run: |
+          COP_BRANCH="${{ needs.guard.outputs.cop_branch }}"
+          ITERATION="${{ needs.guard.outputs.iteration }}"
+          NEXT=$((ITERATION + 1))
+
+          if [[ -z "$(git status -s)" ]]; then
+            echo "✅ No changes to commit (iteration ${NEXT})"
+            echo "fixes_applied=false" >> "$GITHUB_OUTPUT"
+            echo "fix_summary=No fixes needed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED_FILES=$(git diff --name-only | wc -l | tr -d ' ')
+          SUMMARY="claude-code-${CHANGED_FILES}-files"
+
+          git add -A
+          git commit -m "fix: Claude Code auto-fix Python (${CHANGED_FILES} files, iteration ${NEXT})
+
+          copilot-autofix: true"
+
+          echo "fixes_applied=true" >> "$GITHUB_OUTPUT"
+          echo "fix_summary=${SUMMARY}" >> "$GITHUB_OUTPUT"
+          echo "📝 Committed on ${COP_BRANCH} (iteration ${NEXT}): ${CHANGED_FILES} files changed"
+
+      - name: "Push _cop branch → triggers CI recheck"
+        if: steps.commit.outputs.fixes_applied == 'true'
+        env:
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          COP_BRANCH="${{ needs.guard.outputs.cop_branch }}"
+          git remote set-url origin "https://x-access-token:${GH_APP_TOKEN}@github.com/${{ github.repository }}.git"
+          git push origin "HEAD:${COP_BRANCH}"
+          echo "✅ Pushed to ${COP_BRANCH} — CI re-triggers automatically"
+
+      # ── Summary ─────────────────────────────────────────────────────────
+      - name: Generate Summary
+        if: always()
+        run: |
+          COP_BRANCH="${{ needs.guard.outputs.cop_branch }}"
+          FEATURE_BRANCH="${{ needs.guard.outputs.feature_branch }}"
+          ITERATION="${{ needs.guard.outputs.iteration }}"
+          MAX="${{ inputs.max_copilot_attempts }}"
+
+          echo '# 🤖 Python Autofix Summary (Claude Code)' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo "**_cop branch:** \`${COP_BRANCH}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Feature branch:** \`${FEATURE_BRANCH}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Iteration:** ${ITERATION} / ${MAX}" >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+
+          echo '| Fix Type | Status |' >> $GITHUB_STEP_SUMMARY
+          echo '|----------|--------|' >> $GITHUB_STEP_SUMMARY
+          echo "| Flake8 | ${{ inputs.copilot_fix_flake8 && '✅ Enabled' || '⏭️ Disabled' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Bandit | ${{ inputs.copilot_fix_bandit && '✅ Enabled' || '⏭️ Disabled' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ inputs.copilot_fix_tests && '✅ Enabled' || '⏭️ Disabled' }} |" >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ steps.commit.outputs.fixes_applied }}" == "true" ]]; then
+            echo "**🔄 Fixes pushed to \`${COP_BRANCH}\` — CI re-triggers automatically.**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo '**✅ No changes needed this iteration.**' >> $GITHUB_STEP_SUMMARY
+          fi

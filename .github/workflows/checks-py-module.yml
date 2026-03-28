@@ -108,10 +108,10 @@ on:
         value: ${{ jobs.python_tests.outputs.all_tests_passed }}
       autofix_applied:
         description: Whether Copilot autofix was applied
-        value: ${{ jobs.copilot_autofix.outputs.fixes_applied }}
+        value: ${{ jobs.python_ai_autofix.outputs.fixes_applied }}
       cop_branch:
         description: Name of the _cop branch used for fixes
-        value: ${{ jobs.copilot_autofix.outputs.cop_branch }}
+        value: ${{ jobs.python_ai_autofix.outputs.cop_branch }}
 
 concurrency:
   group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
@@ -150,7 +150,7 @@ jobs:
     secrets: inherit
 
   # ── Optional: Copilot Autofix on _cop branch (only on failure) ──────
-  copilot_autofix:
+  python_ai_autofix:
     needs:
       - python_base
       - python_tests
@@ -159,7 +159,7 @@ jobs:
       inputs.autofix_include &&
       (needs.python_base.outputs.all_steps_passed != 'true' || needs.python_tests.outputs.all_tests_passed != 'true') &&
       !(needs.python_base.result == 'skipped' && needs.python_tests.result == 'skipped')
-    uses: acai-solutions/github-workflows/.github/workflows/copilot-autofix.yml@py_test
+    uses: acai-solutions/github-workflows/.github/workflows/python-ai-autofix.yml@py_test
     with:
       runner_type: ${{ inputs.runner_type }}
       fix_python: true
@@ -258,7 +258,7 @@ jobs:
     needs:
       - python_base
       - python_tests
-      - copilot_autofix
+      - python_ai_autofix
       - create_cop_pr
     runs-on: ${{ inputs.runner_type }}
     if: always()
@@ -274,7 +274,7 @@ jobs:
           echo '|-----------|--------|' >> $GITHUB_STEP_SUMMARY
           echo "| 🐍 Python Base (Quality) | ${{ needs.python_base.outputs.all_steps_passed == 'true' && '✅ Passed' || needs.python_base.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 🧪 Python Tests | ${{ needs.python_tests.outputs.all_tests_passed == 'true' && '✅ Passed' || needs.python_tests.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🤖 Copilot Autofix | ${{ needs.copilot_autofix.outputs.fixes_applied == 'true' && '✅ Fixes applied' || needs.copilot_autofix.result == 'skipped' && '⏭️ Skipped' || '⚠️ No fixes' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🤖 Copilot Autofix | ${{ needs.python_ai_autofix.outputs.fixes_applied == 'true' && '✅ Fixes applied' || needs.python_ai_autofix.result == 'skipped' && '⏭️ Skipped' || '⚠️ No fixes' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 📋 _cop PR | ${{ needs.create_cop_pr.result == 'success' && '✅ PR erstellt' || needs.create_cop_pr.result == 'skipped' && '⏭️ Skipped' || '⚠️ Fehler' }} |" >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
 
