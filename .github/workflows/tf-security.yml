@@ -186,7 +186,7 @@ jobs:
           trivy_version: ${{ inputs.trivy_version }}
 
       - name: Install Trivy
-        uses: aquasecurity/setup-trivy@v0.2.3
+        uses: aquasecurity/setup-trivy@e07451d2e059ed86c2870430ea286b3a9e0bf241
         with:
           version: ${{ inputs.trivy_version }}
 
@@ -195,7 +195,7 @@ jobs:
         if: ${{ github.event_name != 'pull_request' }}
         id: trivy_scan
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
           scan-type: config
           scan-ref: .
@@ -205,6 +205,7 @@ jobs:
           severity: CRITICAL,HIGH
           timeout: 10m
           skip-dirs: examples,.terraform
+          skip-setup-trivy: true
 
       - name: Upload Trivy SARIF to Code Scanning
         if: ${{ github.event_name != 'pull_request' && always() }}
