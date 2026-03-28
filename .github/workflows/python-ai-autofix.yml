@@ -378,10 +378,9 @@ jobs:
 
       # ── Claude Code agent ───────────────────────────────────────────────
       - name: "🤖 Claude Code: Fix Python findings"
-        id: claude_fix
-        if: steps.prompt.outputs.has_work == 'true'
         uses: anthropics/claude-code-action@v1
         with:
+          prompt: "Follow the instructions in the prompt file."
           prompt_file: "/tmp/claude-fix-prompt.txt"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ steps.app_token.outputs.token }}
@@ -390,7 +389,7 @@ jobs:
             --model claude-sonnet-4-20250514
             --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,LS,Bash(flake8:*),Bash(bandit:*),Bash(pytest:*),Bash(python:*),Bash(pip:*),Bash(cd:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(find:*),Bash(ls:*)"
           track_progress: false
-
+                
       # ── Clean up, commit, push ──────────────────────────────────────────
       - name: Clean up temporary config
         run: |
