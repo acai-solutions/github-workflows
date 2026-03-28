@@ -75,27 +75,29 @@ on:
         default: ""
         required: false
         type: string
+
+      # ── AI Autofix (optional) ───────────────────────────────────────────
       autofix_include:
-        description: "Whether to run Copilot autofix on _cop branch when checks fail"
+        description: "Whether to run AI autofix on _cop branch when checks fail"
         required: false
         default: false
         type: boolean
       copilot_fix_flake8:
-        description: "Whether Copilot should attempt to fix flake8 findings"
+        description: "Whether Claude should fix flake8 findings"
         required: false
         default: true
         type: boolean
       copilot_fix_bandit:
-        description: "Whether Copilot should attempt to fix bandit findings"
+        description: "Whether Claude should fix bandit findings"
         required: false
         default: true
         type: boolean
       copilot_fix_tests:
-        description: "Whether Copilot should attempt to fix failing tests"
+        description: "Whether Claude should fix failing tests"
         required: false
         default: false
         type: boolean
-        
+
     outputs:
       all_steps_passed:
         description: Indicates if all pipeline steps passed successfully
@@ -107,7 +109,7 @@ on:
         description: Python tests pipeline status
         value: ${{ jobs.python_tests.outputs.all_tests_passed }}
       autofix_applied:
-        description: Whether Copilot autofix was applied
+        description: Whether AI autofix was applied
         value: ${{ jobs.python_ai_autofix.outputs.fixes_applied }}
       cop_branch:
         description: Name of the _cop branch used for fixes
@@ -122,6 +124,7 @@ defaults:
     shell: bash
 
 jobs:
+  # ── Quality checks (Black, isort, Flake8, Bandit) ───────────────────
   python_base:
     if: ${{ always() }}
     uses: acai-solutions/github-workflows/.github/workflows/python-base.yml@main
@@ -138,6 +141,7 @@ jobs:
       python_config_path: ${{ inputs.python_lint_config_path }}
     secrets: inherit
 
+  # ── Pytest per module ───────────────────────────────────────────────
   python_tests:
     if: ${{ inputs.testing_include && inputs.test_modules != '[]' }}
     uses: acai-solutions/github-workflows/.github/workflows/python-test.yml@py_test
@@ -149,7 +153,7 @@ jobs:
       extra_pip_packages: ${{ inputs.extra_pip_packages }}
     secrets: inherit
 
-  # ── Optional: Copilot Autofix on _cop branch (only on failure) ──────
+  # ── AI Autofix on _cop branch (only when checks fail) ───────────────
   python_ai_autofix:
     needs:
       - python_base
@@ -157,12 +161,13 @@ jobs:
     if: |
       always() &&
       inputs.autofix_include &&
-      (needs.python_base.outputs.all_steps_passed != 'true' || needs.python_tests.outputs.all_tests_passed != 'true') &&
-      !(needs.python_base.result == 'skipped' && needs.python_tests.result == 'skipped')
+      (needs.python_base.outputs.all_steps_passed != 'true' ||
+       needs.python_tests.outputs.all_tests_passed != 'true') &&
+      !(needs.python_base.result == 'skipped' &&
+        needs.python_tests.result == 'skipped')
     uses: acai-solutions/github-workflows/.github/workflows/python-ai-autofix.yml@py_test
     with:
       runner_type: ${{ inputs.runner_type }}
-      fix_python: true
       python_version: ${{ inputs.python_version }}
       python_source_path: ${{ inputs.python_source_path }}
       copilot_fix_flake8: ${{ inputs.copilot_fix_flake8 }}
@@ -177,7 +182,7 @@ jobs:
       python_config_path: ${{ inputs.python_lint_config_path }}
     secrets: inherit
 
-  # ── Create PR from _cop → feature when checks pass on _cop ─────────
+  # ── Create PR: _cop → feature (when checks pass on _cop) ───────────
   create_cop_pr:
     needs:
       - python_base
@@ -187,8 +192,10 @@ jobs:
       always() &&
       inputs.autofix_include &&
       endsWith(github.ref_name, '_cop') &&
-      (needs.python_base.outputs.all_steps_passed == 'true' || needs.python_base.result == 'skipped') &&
-      (needs.python_tests.outputs.all_tests_passed == 'true' || needs.python_tests.result == 'skipped')
+      (needs.python_base.outputs.all_steps_passed == 'true' ||
+       needs.python_base.result == 'skipped') &&
+      (needs.python_tests.outputs.all_tests_passed == 'true' ||
+       needs.python_tests.result == 'skipped')
     steps:
       - name: Generate GitHub App Token
         id: app_token
@@ -205,11 +212,9 @@ jobs:
             const copBranch = context.ref.replace('refs/heads/', '');
             const featureBranch = copBranch.replace(/_cop$/, '');
 
-            core.info(`_cop branch: ${copBranch}`);
-            core.info(`Feature branch: ${featureBranch}`);
+            core.info(`_cop: ${copBranch} → feature: ${featureBranch}`);
 
-            // Check if PR already exists
-            const { data: existingPrs } = await github.rest.pulls.list({
+            const { data: existing } = await github.rest.pulls.list({
               owner: context.repo.owner,
               repo: context.repo.repo,
               head: `${context.repo.owner}:${copBranch}`,
@@ -217,43 +222,37 @@ jobs:
               state: 'open',
             });
 
-            if (existingPrs.length > 0) {
-              const pr = existingPrs[0];
-              core.info(`PR already exists: ${pr.html_url}`);
-
+            if (existing.length > 0) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: pr.number,
-                body: [
-                  '✅ **Alle Checks bestanden** auf `' + copBranch + '`.',
-                  '',
-                  'Dieser PR ist bereit zum Review und Merge.',
-                ].join('\n'),
+                issue_number: existing[0].number,
+                body: `✅ **Alle Checks bestanden** auf \`${copBranch}\`.\n\nDieser PR ist bereit zum Review und Merge.`,
               });
+              core.info(`Updated existing PR: ${existing[0].html_url}`);
             } else {
               const { data: pr } = await github.rest.pulls.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                title: `fix: Copilot Auto-Fixes für \`${featureBranch}\``,
+                title: `fix: AI Auto-Fixes für \`${featureBranch}\``,
                 head: copBranch,
                 base: featureBranch,
                 body: [
-                  '## 🤖 Copilot Auto-Fix PR',
+                  '## 🤖 AI Auto-Fix PR',
                   '',
                   `Automatische Code-Korrekturen für Branch \`${featureBranch}\`.`,
-                  `Alle Checks sind bestanden auf \`${copBranch}\`.`,
+                  `Alle Checks bestanden auf \`${copBranch}\`.`,
                   '',
                   '**Bitte Review durchführen und bei Zufriedenheit mergen.**',
                   '',
                   '---',
-                  '_Erstellt durch die Copilot Autofix CI-Pipeline._',
+                  '_Erstellt durch die AI Autofix CI-Pipeline (Claude Code)._',
                 ].join('\n'),
               });
-
               core.info(`PR created: ${pr.html_url}`);
             }
 
+  # ── Summary gate ────────────────────────────────────────────────────
   py_module_checks_summary:
     needs:
       - python_base
@@ -265,47 +264,28 @@ jobs:
     outputs:
       all_passed: ${{ steps.status.outputs.all_passed }}
     steps:
-      - name: Generate Overall Summary
+      - name: Summary
         run: |
-          echo '# 📊 Python Module Checks - Overall Summary' >> $GITHUB_STEP_SUMMARY
+          echo '# 📊 Python Module Checks' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
-          echo '## Pipeline Results' >> $GITHUB_STEP_SUMMARY
           echo '| Component | Status |' >> $GITHUB_STEP_SUMMARY
           echo '|-----------|--------|' >> $GITHUB_STEP_SUMMARY
-          echo "| 🐍 Python Base (Quality) | ${{ needs.python_base.outputs.all_steps_passed == 'true' && '✅ Passed' || needs.python_base.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🧪 Python Tests | ${{ needs.python_tests.outputs.all_tests_passed == 'true' && '✅ Passed' || needs.python_tests.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🤖 Copilot Autofix | ${{ needs.python_ai_autofix.outputs.fixes_applied == 'true' && '✅ Fixes applied' || needs.python_ai_autofix.result == 'skipped' && '⏭️ Skipped' || '⚠️ No fixes' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📋 _cop PR | ${{ needs.create_cop_pr.result == 'success' && '✅ PR erstellt' || needs.create_cop_pr.result == 'skipped' && '⏭️ Skipped' || '⚠️ Fehler' }} |" >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
+          echo "| 🐍 Quality (Black/isort/Flake8/Bandit) | ${{ needs.python_base.outputs.all_steps_passed == 'true' && '✅' || needs.python_base.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧪 Tests | ${{ needs.python_tests.outputs.all_tests_passed == 'true' && '✅' || needs.python_tests.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🤖 AI Autofix | ${{ needs.python_ai_autofix.outputs.fixes_applied == 'true' && '✅ Applied' || needs.python_ai_autofix.result == 'skipped' && '⏭️' || '—' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📋 _cop PR | ${{ needs.create_cop_pr.result == 'success' && '✅' || needs.create_cop_pr.result == 'skipped' && '⏭️' || '—' }} |" >> $GITHUB_STEP_SUMMARY
 
-          PY_BASE_PASSED="${{ needs.python_base.outputs.all_steps_passed == 'true' || needs.python_base.result == 'skipped' }}"
-          PY_TESTS_PASSED="${{ needs.python_tests.outputs.all_tests_passed == 'true' || needs.python_tests.result == 'skipped' }}"
-
-          if [[ "$PY_BASE_PASSED" == "true" && "$PY_TESTS_PASSED" == "true" ]]; then
-            echo "**🎉 Overall Result: ✅ All checks passed successfully!**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**⚠️ Overall Result: ❌ Some checks failed. Please review the detailed results above.**" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Failed Components:" >> $GITHUB_STEP_SUMMARY
-            if [[ "$PY_BASE_PASSED" != "true" ]]; then
-              echo "- Python Base (Quality)" >> $GITHUB_STEP_SUMMARY
-            fi
-            if [[ "$PY_TESTS_PASSED" != "true" ]]; then
-              echo "- Python Tests" >> $GITHUB_STEP_SUMMARY
-            fi
-          fi
-
-      - name: Check Overall Status
+      - name: Gate
         id: status
         if: always()
         run: |
-          PY_BASE_PASSED="${{ needs.python_base.outputs.all_steps_passed == 'true' || needs.python_base.result == 'skipped' }}"
-          PY_TESTS_PASSED="${{ needs.python_tests.outputs.all_tests_passed == 'true' || needs.python_tests.result == 'skipped' }}"
+          BASE="${{ needs.python_base.outputs.all_steps_passed == 'true' || needs.python_base.result == 'skipped' }}"
+          TESTS="${{ needs.python_tests.outputs.all_tests_passed == 'true' || needs.python_tests.result == 'skipped' }}"
 
-          if [[ "$PY_BASE_PASSED" == "true" && "$PY_TESTS_PASSED" == "true" ]]; then
+          if [[ "$BASE" == "true" && "$TESTS" == "true" ]]; then
             echo "all_passed=true" >> "$GITHUB_OUTPUT"
           else
             echo "all_passed=false" >> "$GITHUB_OUTPUT"
-            echo "::error::Some checks failed. See summary above for details."
+            echo "::error::Some checks failed."
             exit 1
           fi

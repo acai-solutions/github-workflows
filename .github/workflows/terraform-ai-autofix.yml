@@ -1,13 +1,15 @@
-name: Terraform Autofix
+name: Terraform AI Autofix
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Reusable workflow: Auto-fixes Terraform formatting on a dedicated _cop
-# branch using `terraform fmt` (deterministic — no AI).
+# branch using `terraform fmt` (deterministic — no AI needed).
 #
 # Branch Strategy (_cop):
-#   - Feature branch fails checks → <branch>_cop is created ONCE
-#   - Fixes are committed on _cop, push triggers CI on _cop again
-#   - When checks pass, caller creates PR (_cop → feature)
+#   feature branch fails → _cop created → fmt applied → push triggers CI
+#   _cop passes          → caller creates PR (_cop → feature)
+#
+# Prerequisites:
+#   - GH_RELEASE_APP_ID + GH_RELEASE_APP_PRIVATE_KEY secrets
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -33,23 +35,11 @@ on:
         default: "41898282+github-actions[bot]@users.noreply.github.com"
         required: false
         type: string
-      fix_terraform:
-        description: "Accepted for caller compatibility — always true for this workflow"
-        required: false
-        default: true
-        type: boolean
-      max_copilot_attempts:
-        description: "Accepted for caller compatibility — unused (terraform fmt is deterministic)"
-        required: false
-        default: 3
-        type: number
 
     secrets:
       GH_RELEASE_APP_ID:
-        description: "GitHub App ID for generating tokens that trigger workflows"
         required: true
       GH_RELEASE_APP_PRIVATE_KEY:
-        description: "GitHub App private key (PEM)"
         required: true
 
     outputs:
@@ -72,6 +62,7 @@ jobs:
       cop_branch: ${{ steps.branch.outputs.cop_branch }}
 
     steps:
+      # ── Auth + Checkout ─────────────────────────────────────────────────
       - name: Generate GitHub App Token
         id: app_token
         uses: actions/create-github-app-token@v2
@@ -79,61 +70,63 @@ jobs:
           app-id: ${{ secrets.GH_RELEASE_APP_ID }}
           private-key: ${{ secrets.GH_RELEASE_APP_PRIVATE_KEY }}
 
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
           token: ${{ steps.app_token.outputs.token }}
           fetch-depth: 0
 
-      - name: "Setup _cop branch"
+      # ── Branch setup ────────────────────────────────────────────────────
+      - name: Setup _cop branch
         id: branch
         run: |
-          CURRENT_BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
-          BASE_BRANCH="${CURRENT_BRANCH%_cop}"
-          COP_BRANCH="${BASE_BRANCH}_cop"
+          BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
+          BASE="${BRANCH%_cop}"
+          COP="${BASE}_cop"
 
-          echo "cop_branch=${COP_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "cop_branch=${COP}" >> "$GITHUB_OUTPUT"
 
-          git config --local user.name "${{ inputs.commit_user }}"
+          git config --local user.name  "${{ inputs.commit_user }}"
           git config --local user.email "${{ inputs.commit_email }}"
 
-          if [[ "${CURRENT_BRANCH}" == *_cop ]]; then
+          if [[ "${BRANCH}" == *_cop ]]; then
             echo "🔄 Already on _cop branch"
           else
             git fetch origin
-            if git ls-remote --exit-code --heads origin "${COP_BRANCH}" >/dev/null 2>&1; then
-              echo "🔄 _cop branch exists remotely — checking out"
-              git checkout -b "${COP_BRANCH}" "origin/${COP_BRANCH}"
+            if git ls-remote --exit-code --heads origin "${COP}" >/dev/null 2>&1; then
+              git checkout -b "${COP}" "origin/${COP}"
+              echo "🔄 Checked out existing _cop branch"
             else
-              echo "🆕 Creating new _cop branch: ${COP_BRANCH}"
-              git checkout -b "${COP_BRANCH}"
+              git checkout -b "${COP}"
+              echo "🆕 Created _cop branch: ${COP}"
             fi
           fi
+          echo "✅ Branch: $(git branch --show-current)"
 
-          echo "✅ Working on branch: $(git branch --show-current)"
-
+      # ── Terraform fmt ───────────────────────────────────────────────────
       - name: Setup Terraform ${{ inputs.tf_version }}
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ inputs.tf_version }}
 
-      - name: "Apply terraform fmt"
+      - name: Apply terraform fmt
         id: tf_fmt
         run: |
           if terraform fmt -check -recursive >/dev/null 2>&1; then
             echo "changes=false" >> "$GITHUB_OUTPUT"
-            echo "✅ Terraform formatting already correct"
+            echo "✅ Formatting already correct"
           else
             terraform fmt -recursive
             echo "changes=true" >> "$GITHUB_OUTPUT"
             echo "✅ terraform fmt applied"
           fi
 
-      - name: "Commit fixes on _cop branch"
+      # ── Commit + Push ───────────────────────────────────────────────────
+      - name: Commit fixes
         id: commit
         run: |
-          COP_BRANCH="${{ steps.branch.outputs.cop_branch }}"
+          COP="${{ steps.branch.outputs.cop_branch }}"
 
           if [[ -z "$(git status -s)" ]]; then
             echo "✅ No formatting changes needed"
@@ -147,23 +140,27 @@ jobs:
           copilot-autofix: true"
 
           echo "fixes_applied=true" >> "$GITHUB_OUTPUT"
-          echo "📝 Committed terraform fmt fixes on ${COP_BRANCH}"
+          echo "📝 Committed terraform fmt on ${COP}"
 
-      - name: "Push _cop branch → triggers CI recheck"
+      - name: Push _cop branch
         if: steps.commit.outputs.fixes_applied == 'true'
         env:
           GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
-          COP_BRANCH="${{ steps.branch.outputs.cop_branch }}"
-          git remote set-url origin "https://x-access-token:${GH_APP_TOKEN}@github.com/${{ github.repository }}.git"
-          git push origin "HEAD:${COP_BRANCH}"
-          echo "✅ Pushed to ${COP_BRANCH} — CI re-triggers automatically"
+          COP="${{ steps.branch.outputs.cop_branch }}"
+          git remote set-url origin \
+            "https://x-access-token:${GH_APP_TOKEN}@github.com/${{ github.repository }}.git"
+          git push origin "HEAD:${COP}"
+          echo "✅ Pushed ${COP} — CI re-triggers"
 
-      - name: Generate Summary
+      # ── Summary ─────────────────────────────────────────────────────────
+      - name: Summary
         if: always()
         run: |
-          echo '# 🔧 Terraform Autofix Summary' >> $GITHUB_STEP_SUMMARY
+          echo '# 🔧 Terraform AI Autofix' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
-          echo "**_cop branch:** \`${{ steps.branch.outputs.cop_branch }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**terraform fmt:** ${{ steps.tf_fmt.outputs.changes == 'true' && '✅ Applied' || '⏭️ Already clean' }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Committed:** ${{ steps.commit.outputs.fixes_applied == 'true' && '✅ Yes' || '⏭️ No changes' }}" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| _cop branch | \`${{ steps.branch.outputs.cop_branch }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| terraform fmt | ${{ steps.tf_fmt.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Result | ${{ steps.commit.outputs.fixes_applied == 'true' && '🔄 Fixes pushed' || '✅ No changes' }} |" >> $GITHUB_STEP_SUMMARY
