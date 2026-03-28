@@ -91,19 +91,34 @@ jobs:
           print(cfg['project']['name'])
           ")
 
+          # Run pytest, capturing both JUnit XML and verbose output
           pytest "${PKG}/${{ matrix.module }}/_test/" \
             -v \
-            --tb=short \
+            --tb=long \
             --cov="${PKG}.${{ matrix.module }}" \
             --cov-report=term-missing \
-            --junitxml="results-${{ matrix.module }}.xml"
+            --junitxml="results-${{ matrix.module }}.xml" \
+            2>&1 | tee "pytest-output-${{ matrix.module }}.txt" \
+            || true
+
+          # Preserve the actual exit code from the XML
+          python3 -c "
+          import xml.etree.ElementTree as ET, sys
+          tree = ET.parse('results-${{ matrix.module }}.xml')
+          root = tree.getroot()
+          failures = int(root.attrib.get('failures', 0))
+          errors = int(root.attrib.get('errors', 0))
+          sys.exit(1 if (failures + errors) > 0 else 0)
+          "
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ matrix.module }}
-          path: ${{ inputs.python_source_path }}/results-${{ matrix.module }}.xml
+          path: |
+            ${{ inputs.python_source_path }}/results-${{ matrix.module }}.xml
+            ${{ inputs.python_source_path }}/pytest-output-${{ matrix.module }}.txt
 
   # ── Gate job — single required status check ─────────────────────────
   pytest_gate:

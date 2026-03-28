@@ -4,6 +4,12 @@ name: Copilot Autofix
 # Reusable workflow: Auto-fixes Python and/or Terraform findings on a
 # dedicated _cop branch.
 #
+# Performance Optimization:
+#   On the FIRST iteration (feature branch → _cop), findings artifacts from
+#   the upstream python_base and python_tests jobs are downloaded and reused.
+#   On SUBSEQUENT iterations (_cop branch), detection is re-run because the
+#   code has changed from the previous Copilot fix.
+#
 # Branch Strategy (_cop):
 #   - Feature branch fails checks → <branch>_cop is created ONCE
 #   - Fixes are committed on _cop, push triggers CI on _cop again
@@ -12,18 +18,15 @@ name: Copilot Autofix
 #   - NO auto-merge: when checks pass, caller creates PR (_cop → feature)
 #
 # Fix types (can be combined):
-#   - fix_python:    Flake8 + Bandit (detect) → Copilot AI fix
+#   - fix_python:    Flake8 + Bandit + Tests (detect) → Copilot API fix
 #                    (Black/isort/Ruff are already handled by python-base.yml)
 #   - fix_terraform: terraform fmt (deterministic) + TFLint/Copilot (AI)
 #
-# Trigger chain:
-#   Feature branch → checks fail → autofix creates _cop, pushes
-#   _cop push      → checks run  → fail → autofix commits more, pushes
-#   _cop push      → checks run  → pass → PR created (_cop → feature)
-#
-# Iteration control:
-#   - Counts autofix commits on _cop since divergence from feature branch
-#   - Stops at max_copilot_attempts
+# AI Fix Strategy:
+#   Copilot fixes are applied via the GitHub Copilot Chat API. Each file
+#   with findings is sent alongside its source code and the tool output,
+#   and Copilot returns a corrected version of the file which is written
+#   back to disk.
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -37,7 +40,7 @@ on:
 
       # ── Fix type selection ──────────────────────────────────────────────
       fix_python:
-        description: "Apply Python auto-fixes (Flake8+Bandit detection → Copilot AI fix)"
+        description: "Apply Python auto-fixes (Flake8+Bandit+Tests → Copilot API fix)"
         required: false
         default: false
         type: boolean
@@ -63,11 +66,24 @@ on:
         required: false
         default: true
         type: boolean
+      copilot_fix_bandit:
+        description: "Whether Copilot should attempt to fix bandit findings"
+        required: false
+        default: true
+        type: boolean
       copilot_fix_tests:
-        description: "Whether Copilot should attempt to fix failing tests (risky!)"
+        description: "Whether Copilot should attempt to fix failing tests"
         required: false
         default: false
         type: boolean
+      test_modules:
+        description: >
+          JSON array of module names whose _test/ folders should be exercised.
+          Required when copilot_fix_tests is true.
+          Example: '["logging","storage","xml_parser"]'
+        default: "[]"
+        required: false
+        type: string
       extra_pip_packages:
         description: "Space-separated extra pip packages to install"
         default: ""
@@ -120,6 +136,9 @@ on:
       GH_RELEASE_APP_PRIVATE_KEY:
         description: "GitHub App private key (PEM)"
         required: true
+      COPILOT_API_TOKEN:
+        description: "Token for Copilot API (GitHub PAT with copilot scope)"
+        required: false
 
     outputs:
       fixes_applied:
@@ -153,6 +172,7 @@ jobs:
       cop_branch: ${{ steps.detect.outputs.cop_branch }}
       feature_branch: ${{ steps.detect.outputs.feature_branch }}
       iteration: ${{ steps.detect.outputs.iteration }}
+      reuse_artifacts: ${{ steps.detect.outputs.reuse_artifacts }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
@@ -165,7 +185,6 @@ jobs:
         run: |
           CURRENT_BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
 
-          # Determine if we are on a _cop branch or a feature branch
           if [[ "${CURRENT_BRANCH}" == *_cop ]]; then
             IS_COP=true
             FEATURE_BRANCH="${CURRENT_BRANCH%_cop}"
@@ -181,7 +200,6 @@ jobs:
           echo "feature_branch=${FEATURE_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "cop_branch=${COP_BRANCH}" >> "$GITHUB_OUTPUT"
 
-          # Count autofix iterations on _cop branch
           ITERATION=0
           if [[ "${IS_COP}" == "true" ]]; then
             git fetch origin "${FEATURE_BRANCH}" 2>/dev/null || true
@@ -199,6 +217,16 @@ jobs:
             echo "should_run=false" >> "$GITHUB_OUTPUT"
           else
             echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          # First iteration from feature branch: reuse upstream artifacts
+          # Subsequent iterations on _cop: must re-run (code has changed)
+          if [[ "${IS_COP}" == "false" ]]; then
+            echo "reuse_artifacts=true" >> "$GITHUB_OUTPUT"
+            echo "📦 First iteration — will reuse upstream check artifacts"
+          else
+            echo "reuse_artifacts=false" >> "$GITHUB_OUTPUT"
+            echo "🔄 _cop iteration ${ITERATION} — will re-run detection"
           fi
 
           echo "📌 Current branch:  ${CURRENT_BRANCH}"
@@ -258,6 +286,262 @@ jobs:
           echo "✅ Working on branch: $(git branch --show-current)"
 
       # ════════════════════════════════════════════════════════════════════
+      # COPILOT FIX HELPER — writes corrected files via Copilot Chat API
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "Create Copilot fix helper"
+        if: inputs.fix_python
+        run: |
+          cat > /tmp/copilot_fix.py << 'HELPER_EOF'
+          """
+          Copilot Fix Helper — applies AI-based code fixes.
+
+          Sends source files + tool findings to the Copilot Chat API and
+          writes corrected files back to disk.
+
+          Usage:
+              python copilot_fix.py flake8  <findings_json> <source_root>
+              python copilot_fix.py bandit  <findings_json> <source_root>
+              python copilot_fix.py tests   <pytest_output>  <source_root>
+
+          Env: COPILOT_API_TOKEN or GH_TOKEN
+          """
+          import json, os, sys, re
+
+          def get_copilot_fix(source_code, filepath, prompt, token):
+              """Call Copilot Chat API and return the corrected file content."""
+              import urllib.request
+
+              system_prompt = (
+                  "You are a code fixing assistant. You receive a Python source file "
+                  "and a description of issues found by linting, security, or test tools. "
+                  "Return ONLY the complete corrected Python source file. "
+                  "No markdown fences, no explanations, no comments about changes. "
+                  "Preserve the overall structure, docstrings, and logic. "
+                  "Only fix the specific issues described. "
+                  "If you cannot fix an issue safely, leave that code unchanged."
+              )
+
+              user_prompt = (
+                  f"File: {filepath}\n\n"
+                  f"Source code:\n```python\n{source_code}\n```\n\n"
+                  f"Issues to fix:\n{prompt}\n\n"
+                  f"Return the complete corrected file content only."
+              )
+
+              payload = json.dumps({
+                  "model": "gpt-4o",
+                  "messages": [
+                      {"role": "system", "content": system_prompt},
+                      {"role": "user", "content": user_prompt}
+                  ],
+                  "temperature": 0.1,
+                  "max_tokens": 8192,
+              }).encode()
+
+              req = urllib.request.Request(
+                  "https://api.githubcopilot.com/chat/completions",
+                  data=payload,
+                  headers={
+                      "Content-Type": "application/json",
+                      "Authorization": f"Bearer {token}",
+                      "Editor-Version": "vscode/1.95.0",
+                      "Copilot-Integration-Id": "vscode-chat",
+                  },
+              )
+
+              try:
+                  with urllib.request.urlopen(req, timeout=120) as resp:
+                      data = json.loads(resp.read())
+                  content = data["choices"][0]["message"]["content"]
+                  content = re.sub(r'^```(?:python)?\s*\n', '', content)
+                  content = re.sub(r'\n```\s*$', '', content)
+                  return content.strip() + "\n"
+              except Exception as e:
+                  print(f"  ⚠️  Copilot API error for {filepath}: {e}")
+                  return None
+
+
+          def resolve_path(filepath, source_root):
+              """Resolve a filepath, trying multiple strategies."""
+              candidates = [
+                  filepath,
+                  os.path.join(source_root, filepath),
+                  os.path.abspath(filepath),
+              ]
+              for c in candidates:
+                  if os.path.exists(c):
+                      return c
+              return None
+
+
+          def fix_flake8(findings_path, source_root, token):
+              try:
+                  with open(findings_path) as f:
+                      data = json.load(f)
+              except Exception:
+                  return 0
+
+              fixed = 0
+              for filepath, issues in data.items():
+                  if not issues:
+                      continue
+                  abs_path = resolve_path(filepath, source_root)
+                  if not abs_path:
+                      continue
+
+                  with open(abs_path) as f:
+                      source = f.read()
+
+                  findings_text = "\n".join(
+                      f"  Line {i['line_number']}:{i['column_number']} — {i['code']} {i['text']}"
+                      for i in issues[:20]
+                  )
+
+                  print(f"  📝 Fixing {len(issues)} flake8 finding(s) in {filepath}")
+                  result = get_copilot_fix(source, filepath, f"Flake8 findings:\n{findings_text}", token)
+                  if result and result != source:
+                      with open(abs_path, "w") as f:
+                          f.write(result)
+                      print(f"  ✅ Fixed: {filepath}")
+                      fixed += 1
+                  else:
+                      print(f"  ⏭️  No changes for: {filepath}")
+              return fixed
+
+
+          def fix_bandit(findings_path, source_root, token):
+              try:
+                  with open(findings_path) as f:
+                      data = json.load(f)
+              except Exception:
+                  return 0
+
+              results = data.get("results", [])
+              if not results:
+                  return 0
+
+              by_file = {}
+              for r in results:
+                  by_file.setdefault(r.get("filename", ""), []).append(r)
+
+              fixed = 0
+              for filepath, issues in by_file.items():
+                  abs_path = resolve_path(filepath, source_root)
+                  if not abs_path:
+                      continue
+
+                  with open(abs_path) as f:
+                      source = f.read()
+
+                  findings_text = "\n".join(
+                      f"  Line {i['line_number']}: [{i['test_id']}] {i['issue_text']} "
+                      f"(Severity: {i['issue_severity']}, Confidence: {i['issue_confidence']})"
+                      for i in issues[:15]
+                  )
+
+                  print(f"  📝 Fixing {len(issues)} bandit finding(s) in {filepath}")
+                  result = get_copilot_fix(source, filepath, f"Bandit security findings:\n{findings_text}", token)
+                  if result and result != source:
+                      with open(abs_path, "w") as f:
+                          f.write(result)
+                      print(f"  ✅ Fixed: {filepath}")
+                      fixed += 1
+                  else:
+                      print(f"  ⏭️  No changes for: {filepath}")
+              return fixed
+
+
+          def fix_tests(pytest_output_path, source_root, token):
+              try:
+                  with open(pytest_output_path) as f:
+                      pytest_output = f.read()
+              except Exception:
+                  print("  ⚠️  No pytest output found")
+                  return 0
+
+              if not pytest_output.strip():
+                  return 0
+
+              failed_tests = re.findall(r'FAILED\s+(\S+?)::(\S+)', pytest_output)
+              if not failed_tests:
+                  failed_tests = re.findall(r'(\S+\.py)::(\S+)\s+(?:FAILED|ERROR)', pytest_output)
+              if not failed_tests:
+                  print("  ⚠️  Could not parse failed test locations from pytest output")
+                  return 0
+
+              files_to_fix = {}
+              for test_file, test_name in failed_tests:
+                  abs_test = resolve_path(test_file, source_root)
+                  if abs_test:
+                      files_to_fix.setdefault(abs_test, []).append(f"FAILED {test_name}")
+
+                  source_file = test_file.replace("/_test/test_", "/").replace("_test/test_", "/")
+                  abs_source = resolve_path(source_file, source_root)
+                  if abs_source and abs_source != abs_test:
+                      files_to_fix.setdefault(abs_source, []).append(
+                          f"Test {test_name} in {test_file} failed"
+                      )
+
+              output_lines = pytest_output.strip().split("\n")
+              truncated = "\n".join(output_lines[-100:])
+
+              fixed = 0
+              for filepath, context_lines in files_to_fix.items():
+                  with open(filepath) as f:
+                      source = f.read()
+
+                  context = "\n".join(context_lines)
+                  prompt = (
+                      f"These test failures involve this file:\n{context}\n\n"
+                      f"Pytest output (last 100 lines):\n{truncated}\n\n"
+                      f"Fix the SOURCE CODE to make the tests pass. "
+                      f"If this IS a test file, only fix obvious test bugs "
+                      f"(wrong assertions, missing imports, typos) — "
+                      f"do NOT weaken or remove test assertions."
+                  )
+
+                  rel_path = os.path.relpath(filepath, source_root)
+                  print(f"  📝 Fixing test failures in {rel_path}")
+                  result = get_copilot_fix(source, rel_path, prompt, token)
+                  if result and result != source:
+                      with open(filepath, "w") as f:
+                          f.write(result)
+                      print(f"  ✅ Fixed: {rel_path}")
+                      fixed += 1
+                  else:
+                      print(f"  ⏭️  No changes for: {rel_path}")
+              return fixed
+
+
+          def main():
+              if len(sys.argv) < 4:
+                  print(f"Usage: {sys.argv[0]} <flake8|bandit|tests> <findings_path> <source_root>")
+                  sys.exit(1)
+
+              mode, findings_path, source_root = sys.argv[1], sys.argv[2], sys.argv[3]
+
+              token = os.environ.get("COPILOT_API_TOKEN") or os.environ.get("GH_TOKEN", "")
+              if not token:
+                  print("⚠️  No COPILOT_API_TOKEN or GH_TOKEN — skipping AI fixes")
+                  sys.exit(0)
+
+              fixes = {"flake8": fix_flake8, "bandit": fix_bandit, "tests": fix_tests}
+              fn = fixes.get(mode)
+              if not fn:
+                  print(f"Unknown mode: {mode}")
+                  sys.exit(1)
+
+              count = fn(findings_path, source_root, token)
+              print(f"\n🤖 Copilot {mode} fix: {count} file(s) modified")
+
+          if __name__ == "__main__":
+              main()
+          HELPER_EOF
+
+          echo "✅ Copilot fix helper created"
+
+      # ════════════════════════════════════════════════════════════════════
       # TERRAFORM FIXES
       # ════════════════════════════════════════════════════════════════════
 
@@ -295,8 +579,7 @@ jobs:
           fi
 
       # ════════════════════════════════════════════════════════════════════
-      # PYTHON: DETECT FINDINGS (Flake8 + Bandit)
-      # (Black/isort/Ruff are handled by python-base.yml)
+      # PYTHON SETUP (always needed for AI fix phase)
       # ════════════════════════════════════════════════════════════════════
 
       - name: Set up Python ${{ inputs.python_version }}
@@ -310,30 +593,143 @@ jobs:
         if: inputs.fix_python
         run: |
           python -m pip install --upgrade pip
-          pip install flake8 flake8-json bandit
+
+          # Always need these for _cop re-detection iterations
+          if [[ "${{ needs.guard.outputs.reuse_artifacts }}" == "false" ]]; then
+            pip install flake8 flake8-json bandit
+          fi
 
           if [[ -n "${{ inputs.extra_pip_packages }}" ]]; then
             pip install ${{ inputs.extra_pip_packages }}
           fi
 
-          # Install project in editable mode if pyproject.toml exists
           if [[ -f "${{ inputs.python_source_path }}/pyproject.toml" ]]; then
             pip install -e "${{ inputs.python_source_path }}"
           fi
 
-      # ── Python: Collect findings for Copilot AI fix ─────────────────────
+          if [[ "${{ inputs.copilot_fix_tests }}" == "true" && "${{ needs.guard.outputs.reuse_artifacts }}" == "false" ]]; then
+            pip install pytest pytest-cov
+          fi
+
+      # ════════════════════════════════════════════════════════════════════
+      # FIRST ITERATION: Download artifacts from upstream checks
+      # (Code is identical to what python_base/python_tests ran against)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "📦 Download flake8 report from upstream"
+        id: dl_flake8
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_flake8 &&
+          needs.guard.outputs.reuse_artifacts == 'true'
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: flake8-report
+          path: /tmp/upstream-artifacts
+
+      - name: "📦 Download bandit report from upstream"
+        id: dl_bandit
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_bandit &&
+          needs.guard.outputs.reuse_artifacts == 'true'
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: bandit-report
+          path: /tmp/upstream-artifacts
+
+      - name: "📦 Download pytest output from upstream"
+        id: dl_tests
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_tests &&
+          needs.guard.outputs.reuse_artifacts == 'true'
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: test-results-*
+          path: /tmp/upstream-test-artifacts
+          merge-multiple: true
+
+      - name: "📦 Prepare reused artifacts"
+        id: reuse_findings
+        if: needs.guard.outputs.reuse_artifacts == 'true' && inputs.fix_python
+        run: |
+          echo "📦 Checking downloaded upstream artifacts..."
+
+          # ── Flake8 ──
+          FLAKE8_COUNT=0
+          if [[ -f "/tmp/upstream-artifacts/flake8-report.json" ]]; then
+            cp /tmp/upstream-artifacts/flake8-report.json /tmp/flake8-findings.json
+            FLAKE8_COUNT=$(python3 -c "
+          import json
+          try:
+              with open('/tmp/flake8-findings.json') as f:
+                  data = json.load(f)
+              print(sum(len(v) for v in data.values()))
+          except Exception:
+              print(0)
+          ")
+            echo "  ✅ Reusing flake8 report: ${FLAKE8_COUNT} findings"
+          else
+            echo "  ⚠️ No flake8 artifact found"
+          fi
+          echo "flake8_count=${FLAKE8_COUNT}" >> "$GITHUB_OUTPUT"
+
+          # ── Bandit ──
+          BANDIT_COUNT=0
+          if [[ -f "/tmp/upstream-artifacts/bandit-report.json" ]]; then
+            cp /tmp/upstream-artifacts/bandit-report.json /tmp/bandit-findings.json
+            BANDIT_COUNT=$(python3 -c "
+          import json
+          try:
+              with open('/tmp/bandit-findings.json') as f:
+                  data = json.load(f)
+              print(len(data.get('results', [])))
+          except Exception:
+              print(0)
+          ")
+            echo "  ✅ Reusing bandit report: ${BANDIT_COUNT} findings"
+          else
+            echo "  ⚠️ No bandit artifact found"
+          fi
+          echo "bandit_count=${BANDIT_COUNT}" >> "$GITHUB_OUTPUT"
+
+          # ── Pytest output ──
+          TESTS_HAVE_FAILURES=false
+          if ls /tmp/upstream-test-artifacts/pytest-output-*.txt 1>/dev/null 2>&1; then
+            # Merge all per-module pytest outputs into one file
+            cat /tmp/upstream-test-artifacts/pytest-output-*.txt > /tmp/pytest-output.txt
+            if grep -qE 'FAILED|ERROR' /tmp/pytest-output.txt; then
+              TESTS_HAVE_FAILURES=true
+              echo "  ✅ Reusing pytest output: failures detected"
+            else
+              echo "  ✅ Reusing pytest output: all passing"
+            fi
+          else
+            echo "  ⚠️ No pytest output artifacts found"
+          fi
+          echo "tests_have_failures=${TESTS_HAVE_FAILURES}" >> "$GITHUB_OUTPUT"
+
+      # ════════════════════════════════════════════════════════════════════
+      # _COP ITERATIONS: Re-run detection (code has changed)
+      # ════════════════════════════════════════════════════════════════════
+
       - name: "PY: Ensure flake8 config is available"
         id: flake8_config
-        if: inputs.fix_python && inputs.copilot_fix_flake8
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_flake8 &&
+          needs.guard.outputs.reuse_artifacts == 'false'
         run: |
           SOURCE_PATH="${{ inputs.python_source_path }}"
 
-          # 1. Check for local .flake8 at repo root
           if [[ -f ".flake8" ]]; then
             echo "Found local .flake8 in repository."
             echo "config_source=local" >> "$GITHUB_OUTPUT"
           else
-            # 2. Download from central config repo (same logic as python-base.yml)
             echo "Fetching Flake8 config from: ${{ inputs.gh_wf_config_repo }}/${{ inputs.python_config_path }}/.flake8@${{ inputs.gh_wf_config_repo_ref }}"
 
             HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github.v3.raw" \
@@ -347,12 +743,11 @@ jobs:
               echo "✅ Downloaded .flake8 from central config repo"
               echo "config_source=remote" >> "$GITHUB_OUTPUT"
             else
-              echo "⚠️ No .flake8 found locally or in central repo (HTTP $HTTP_CODE) — flake8 will use defaults"
+              echo "⚠️ No .flake8 found (HTTP $HTTP_CODE) — flake8 will use defaults"
               echo "config_source=none" >> "$GITHUB_OUTPUT"
             fi
           fi
 
-          # 3. Copy .flake8 to python_source_path if needed
           if [[ -f ".flake8" && "${SOURCE_PATH}" != "." ]]; then
             cp .flake8 "${SOURCE_PATH}/.flake8"
             echo "📋 Copied .flake8 to ${SOURCE_PATH}/"
@@ -361,33 +756,23 @@ jobs:
             echo "copied=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # Show active config
-          if [[ -f "${SOURCE_PATH}/.flake8" ]]; then
-            echo "📋 Active .flake8 config:"
-            cat "${SOURCE_PATH}/.flake8"
-          elif [[ -f ".flake8" ]]; then
-            echo "📋 Active .flake8 config (repo root):"
-            cat .flake8
-          else
-            echo "⚠️ No .flake8 found — flake8 will use defaults"
-          fi
-
-      - name: "PY: Collect flake8 findings"
+      - name: "PY: Collect flake8 findings (re-run)"
         id: flake8_check
-        if: inputs.fix_python && inputs.copilot_fix_flake8
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_flake8 &&
+          needs.guard.outputs.reuse_artifacts == 'false'
         working-directory: ${{ inputs.python_source_path }}
         continue-on-error: true
         run: |
-          # .flake8 is now in CWD (copied from repo root if needed)
           flake8 . --format=json --output-file=/tmp/flake8-findings.json 2>/dev/null || true
 
           FINDING_COUNT=$(python3 -c "
-          import json, sys
+          import json
           try:
               with open('/tmp/flake8-findings.json') as f:
                   data = json.load(f)
-              total = sum(len(v) for v in data.values())
-              print(total)
+              print(sum(len(v) for v in data.values()))
           except Exception:
               print(0)
           ")
@@ -395,16 +780,19 @@ jobs:
           echo "finding_count=$FINDING_COUNT" >> "$GITHUB_OUTPUT"
           echo "📋 Flake8 findings: $FINDING_COUNT"
 
-      - name: "PY: Collect bandit findings"
+      - name: "PY: Collect bandit findings (re-run)"
         id: bandit_check
-        if: inputs.fix_python
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_bandit &&
+          needs.guard.outputs.reuse_artifacts == 'false'
         working-directory: ${{ inputs.python_source_path }}
         continue-on-error: true
         run: |
           bandit -r . -f json -o /tmp/bandit-findings.json 2>/dev/null || true
 
           FINDING_COUNT=$(python3 -c "
-          import json, sys
+          import json
           try:
               with open('/tmp/bandit-findings.json') as f:
                   data = json.load(f)
@@ -416,18 +804,75 @@ jobs:
           echo "finding_count=$FINDING_COUNT" >> "$GITHUB_OUTPUT"
           echo "📋 Bandit findings: $FINDING_COUNT"
 
-      - name: "PY: Run tests and capture failures"
+      - name: "PY: Run tests and capture failures (re-run)"
         id: test_check
-        if: inputs.fix_python && inputs.copilot_fix_tests
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_tests &&
+          needs.guard.outputs.reuse_artifacts == 'false'
         working-directory: ${{ inputs.python_source_path }}
         continue-on-error: true
         run: |
-          pip install pytest 2>/dev/null
-          if pytest --tb=short --no-header -q 2>/tmp/pytest-output.txt; then
-            echo "tests_pass=true" >> "$GITHUB_OUTPUT"
+          PKG=$(python3 -c "
+          try:
+              import tomllib
+          except ImportError:
+              import tomli as tomllib
+          with open('pyproject.toml','rb') as f:
+              cfg = tomllib.load(f)
+          print(cfg['project']['name'])
+          " 2>/dev/null || echo "")
+
+          TEST_MODULES='${{ inputs.test_modules }}'
+
+          if [[ "${TEST_MODULES}" != "[]" && -n "${PKG}" ]]; then
+            echo "" > /tmp/pytest-output.txt
+            ALL_PASS=true
+
+            for MODULE in $(echo "${TEST_MODULES}" | python3 -c "import json,sys; [print(m) for m in json.load(sys.stdin)]"); do
+              TEST_DIR="${PKG}/${MODULE}/_test/"
+              if [[ -d "${TEST_DIR}" ]]; then
+                echo "🧪 Running tests: ${MODULE}" | tee -a /tmp/pytest-output.txt
+                if ! pytest "${TEST_DIR}" -v --tb=long --no-header 2>&1 | tee -a /tmp/pytest-output.txt; then
+                  ALL_PASS=false
+                fi
+              else
+                echo "⚠️ Test directory not found: ${TEST_DIR}" | tee -a /tmp/pytest-output.txt
+              fi
+            done
+
+            if [[ "${ALL_PASS}" == "true" ]]; then
+              echo "tests_pass=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "tests_pass=false" >> "$GITHUB_OUTPUT"
+              echo "📋 Test failures detected"
+            fi
           else
-            echo "tests_pass=false" >> "$GITHUB_OUTPUT"
-            echo "📋 Test failures detected"
+            if pytest --tb=long --no-header -v 2>&1 | tee /tmp/pytest-output.txt; then
+              echo "tests_pass=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "tests_pass=false" >> "$GITHUB_OUTPUT"
+              echo "📋 Test failures detected"
+            fi
+          fi
+
+      # ════════════════════════════════════════════════════════════════════
+      # RESOLVE FINDING COUNTS (unified from artifact-reuse or re-run)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "Resolve finding counts"
+        id: findings
+        if: inputs.fix_python
+        run: |
+          # Flake8
+          if [[ "${{ needs.guard.outputs.reuse_artifacts }}" == "true" ]]; then
+            echo "flake8_count=${{ steps.reuse_findings.outputs.flake8_count }}" >> "$GITHUB_OUTPUT"
+            echo "bandit_count=${{ steps.reuse_findings.outputs.bandit_count }}" >> "$GITHUB_OUTPUT"
+            echo "tests_failing=${{ steps.reuse_findings.outputs.tests_have_failures }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "flake8_count=${{ steps.flake8_check.outputs.finding_count || '0' }}" >> "$GITHUB_OUTPUT"
+            echo "bandit_count=${{ steps.bandit_check.outputs.finding_count || '0' }}" >> "$GITHUB_OUTPUT"
+            echo "tests_failing=${{ steps.test_check.outputs.tests_pass == 'false' && 'true' || 'false' }}" >> "$GITHUB_OUTPUT"
           fi
 
       # ════════════════════════════════════════════════════════════════════
@@ -439,84 +884,15 @@ jobs:
         if: >
           inputs.fix_python &&
           inputs.copilot_fix_flake8 &&
-          steps.flake8_check.outputs.finding_count != '0' &&
-          steps.flake8_check.outputs.finding_count != ''
+          steps.findings.outputs.flake8_count != '0' &&
+          steps.findings.outputs.flake8_count != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPILOT_API_TOKEN: ${{ secrets.COPILOT_API_TOKEN }}
         working-directory: ${{ inputs.python_source_path }}
         run: |
-          echo "🤖 Asking Copilot to fix ${{ steps.flake8_check.outputs.finding_count }} flake8 findings..."
-
-          # Build a prompt from the flake8 findings
-          FINDINGS_PROMPT=$(python3 << 'PYEOF'
-          import json
-
-          try:
-              with open("/tmp/flake8-findings.json") as f:
-                  data = json.load(f)
-          except Exception:
-              print("No findings to fix.")
-              exit(0)
-
-          lines = []
-          for filepath, issues in data.items():
-              for issue in issues:
-                  lines.append(
-                      f"{filepath}:{issue['line_number']}:{issue['column_number']} "
-                      f"{issue['code']} {issue['text']}"
-                  )
-
-          # Limit to 30 findings to keep the prompt manageable
-          if len(lines) > 30:
-              lines = lines[:30]
-              lines.append(f"... and {len(lines)-30} more findings")
-
-          print("\n".join(lines))
-          PYEOF
-          )
-
-          if [[ -z "$FINDINGS_PROMPT" || "$FINDINGS_PROMPT" == "No findings to fix." ]]; then
-            echo "copilot_changes=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Try using Copilot via gh CLI for each file with findings
-          python3 << 'PYEOF'
-          import json, subprocess, os, sys
-
-          try:
-              with open("/tmp/flake8-findings.json") as f:
-                  data = json.load(f)
-          except Exception:
-              sys.exit(0)
-
-          for filepath, issues in data.items():
-              if not os.path.exists(filepath):
-                  continue
-
-              findings_text = "\n".join(
-                  f"  Line {i['line_number']}: {i['code']} {i['text']}"
-                  for i in issues[:10]
-              )
-
-              print(f"  📝 Findings for {filepath}:")
-              print(findings_text)
-
-              try:
-                  result = subprocess.run(
-                      ["gh", "copilot", "suggest", "-t", "code",
-                       f"Fix these flake8 issues in {filepath}: {findings_text}"],
-                      capture_output=True, text=True, timeout=60,
-                      env={**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")}
-                  )
-                  if result.returncode == 0 and result.stdout.strip():
-                      print(f"  ✅ Copilot suggestion received for {filepath}")
-                  else:
-                      print(f"  ⚠️ Copilot did not return a fix for {filepath}")
-              except (subprocess.TimeoutExpired, FileNotFoundError):
-                  print(f"  ⚠️ gh copilot not available, skipping AI fix for {filepath}")
-
-          PYEOF
+          echo "🤖 Asking Copilot to fix ${{ steps.findings.outputs.flake8_count }} flake8 findings..."
+          python3 /tmp/copilot_fix.py flake8 /tmp/flake8-findings.json "$(pwd)"
 
           if [[ -n "$(git diff --name-only)" ]]; then
             echo "copilot_changes=true" >> "$GITHUB_OUTPUT"
@@ -528,60 +904,16 @@ jobs:
         id: copilot_bandit
         if: >
           inputs.fix_python &&
-          steps.bandit_check.outputs.finding_count != '0' &&
-          steps.bandit_check.outputs.finding_count != ''
+          inputs.copilot_fix_bandit &&
+          steps.findings.outputs.bandit_count != '0' &&
+          steps.findings.outputs.bandit_count != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPILOT_API_TOKEN: ${{ secrets.COPILOT_API_TOKEN }}
         working-directory: ${{ inputs.python_source_path }}
         run: |
-          echo "🤖 Asking Copilot to fix ${{ steps.bandit_check.outputs.finding_count }} bandit findings..."
-
-          python3 << 'PYEOF'
-          import json, subprocess, os, sys
-
-          try:
-              with open("/tmp/bandit-findings.json") as f:
-                  data = json.load(f)
-          except Exception:
-              sys.exit(0)
-
-          results = data.get("results", [])
-          if not results:
-              sys.exit(0)
-
-          # Group by file
-          by_file = {}
-          for r in results:
-              fp = r.get("filename", "")
-              by_file.setdefault(fp, []).append(r)
-
-          for filepath, issues in by_file.items():
-              if not os.path.exists(filepath):
-                  continue
-
-              findings_text = "\n".join(
-                  f"  Line {i['line_number']}: [{i['test_id']}] {i['issue_text']} (Severity: {i['issue_severity']}, Confidence: {i['issue_confidence']})"
-                  for i in issues[:10]
-              )
-
-              print(f"  📝 Bandit findings for {filepath}:")
-              print(findings_text)
-
-              try:
-                  result = subprocess.run(
-                      ["gh", "copilot", "suggest", "-t", "code",
-                       f"Fix these bandit security issues in {filepath}: {findings_text}"],
-                      capture_output=True, text=True, timeout=60,
-                      env={**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")}
-                  )
-                  if result.returncode == 0 and result.stdout.strip():
-                      print(f"  ✅ Copilot suggestion received for {filepath}")
-                  else:
-                      print(f"  ⚠️ Copilot did not return a fix for {filepath}")
-              except (subprocess.TimeoutExpired, FileNotFoundError):
-                  print(f"  ⚠️ gh copilot not available, skipping AI fix for {filepath}")
-
-          PYEOF
+          echo "🤖 Asking Copilot to fix ${{ steps.findings.outputs.bandit_count }} bandit findings..."
+          python3 /tmp/copilot_fix.py bandit /tmp/bandit-findings.json "$(pwd)"
 
           if [[ -n "$(git diff --name-only)" ]]; then
             echo "copilot_changes=true" >> "$GITHUB_OUTPUT"
@@ -594,19 +926,20 @@ jobs:
         if: >
           inputs.fix_python &&
           inputs.copilot_fix_tests &&
-          steps.test_check.outputs.tests_pass == 'false'
+          steps.findings.outputs.tests_failing == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPILOT_API_TOKEN: ${{ secrets.COPILOT_API_TOKEN }}
         working-directory: ${{ inputs.python_source_path }}
         run: |
-          echo "🤖 Asking Copilot to analyze test failures..."
+          echo "🤖 Asking Copilot to fix test failures..."
+          python3 /tmp/copilot_fix.py tests /tmp/pytest-output.txt "$(pwd)"
 
-          TEST_OUTPUT=$(cat /tmp/pytest-output.txt 2>/dev/null | tail -50 || echo "No test output")
-
-          echo "⚠️ Test failure analysis (Copilot suggestions will be added as PR comment)"
-          echo "$TEST_OUTPUT"
-
-          echo "copilot_test_changes=false" >> "$GITHUB_OUTPUT"
+          if [[ -n "$(git diff --name-only)" ]]; then
+            echo "copilot_test_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "copilot_test_changes=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # ════════════════════════════════════════════════════════════════════
       # COMMIT & PUSH
@@ -633,11 +966,11 @@ jobs:
             exit 0
           fi
 
-          # Build commit message with summary of applied tools
           SUMMARY=""
           [[ "${{ steps.tf_fmt.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}tf-fmt "
           [[ "${{ steps.copilot_flake8.outputs.copilot_changes }}" == "true" ]] && SUMMARY="${SUMMARY}copilot-flake8 "
           [[ "${{ steps.copilot_bandit.outputs.copilot_changes }}" == "true" ]] && SUMMARY="${SUMMARY}copilot-bandit "
+          [[ "${{ steps.copilot_tests.outputs.copilot_test_changes }}" == "true" ]] && SUMMARY="${SUMMARY}copilot-tests "
 
           git add -A
           git commit -m "fix: auto-fix findings [${SUMMARY% }] (iteration ${NEXT})
@@ -654,7 +987,6 @@ jobs:
           GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
           COP_BRANCH="${{ needs.guard.outputs.cop_branch }}"
-          # Use App token so the push triggers subsequent workflow runs
           git remote set-url origin "https://x-access-token:${GH_APP_TOKEN}@github.com/${{ github.repository }}.git"
           git push origin "HEAD:${COP_BRANCH}"
           echo "✅ Pushed to ${COP_BRANCH} — CI re-triggers automatically"
@@ -667,12 +999,14 @@ jobs:
           FEATURE_BRANCH="${{ needs.guard.outputs.feature_branch }}"
           ITERATION="${{ needs.guard.outputs.iteration }}"
           MAX="${{ inputs.max_copilot_attempts }}"
+          REUSE="${{ needs.guard.outputs.reuse_artifacts }}"
 
           echo '# 🤖 Copilot Autofix Summary' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo "**_cop branch:** \`${COP_BRANCH}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Feature branch:** \`${FEATURE_BRANCH}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Iteration:** ${ITERATION} / ${MAX}" >> $GITHUB_STEP_SUMMARY
+          echo "**Detection source:** ${REUSE} == 'true' && '📦 Reused from upstream checks' || '🔄 Re-ran on _cop branch'" >> $GITHUB_STEP_SUMMARY
           echo "**Fix types:** ${{ inputs.fix_python && 'Python' || '' }} ${{ inputs.fix_terraform && 'Terraform' || '' }}" >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '| Phase | Tool | Changes |' >> $GITHUB_STEP_SUMMARY
@@ -683,10 +1017,12 @@ jobs:
           fi
 
           if [[ "${{ inputs.fix_python }}" == "true" ]]; then
-            echo "| Detection | Flake8 | ${{ steps.flake8_check.outputs.finding_count || '0' }} findings |" >> $GITHUB_STEP_SUMMARY
-            echo "| Detection | Bandit | ${{ steps.bandit_check.outputs.finding_count || '0' }} findings |" >> $GITHUB_STEP_SUMMARY
+            echo "| Detection | Flake8 | ${{ steps.findings.outputs.flake8_count || '0' }} findings |" >> $GITHUB_STEP_SUMMARY
+            echo "| Detection | Bandit | ${{ steps.findings.outputs.bandit_count || '0' }} findings |" >> $GITHUB_STEP_SUMMARY
+            echo "| Detection | Tests | ${{ steps.findings.outputs.tests_failing == 'true' && '❌ Failures' || '✅ Passing / ⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
             echo "| AI-based | Copilot (flake8) | ${{ steps.copilot_flake8.outputs.copilot_changes == 'true' && '✅ Applied' || '⏭️ Clean / Skipped' }} |" >> $GITHUB_STEP_SUMMARY
             echo "| AI-based | Copilot (bandit) | ${{ steps.copilot_bandit.outputs.copilot_changes == 'true' && '✅ Applied' || '⏭️ Clean / Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| AI-based | Copilot (tests) | ${{ steps.copilot_tests.outputs.copilot_test_changes == 'true' && '✅ Applied' || '⏭️ Clean / Skipped' }} |" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo '' >> $GITHUB_STEP_SUMMARY
