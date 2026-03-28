@@ -1,5 +1,34 @@
 name: Copilot Autofix
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Reusable workflow: Auto-fixes Python and/or Terraform findings on a
+# dedicated _cop branch.
+#
+# Performance Optimization:
+#   On the FIRST iteration (feature branch → _cop), findings artifacts from
+#   the upstream python_base and python_tests jobs are downloaded and reused.
+#   On SUBSEQUENT iterations (_cop branch), detection is re-run because the
+#   code has changed from the previous Copilot fix.
+#
+# Branch Strategy (_cop):
+#   - Feature branch fails checks → <branch>_cop is created ONCE
+#   - Fixes are committed on _cop, push triggers CI on _cop again
+#   - Iterates (fix → push → check → fix → ...) until checks pass
+#   - Max iterations controlled by max_copilot_attempts (default: 3)
+#   - NO auto-merge: when checks pass, caller creates PR (_cop → feature)
+#
+# Fix types (can be combined):
+#   - fix_python:    Flake8 + Bandit + Tests (detect) → Copilot API fix
+#                    (Black/isort/Ruff are already handled by python-base.yml)
+#   - fix_terraform: terraform fmt (deterministic) + TFLint/Copilot (AI)
+#
+# AI Fix Strategy:
+#   Copilot fixes are applied via the GitHub Copilot Chat API. Each file
+#   with findings is sent alongside its source code and the tool output,
+#   and Copilot returns a corrected version of the file which is written
+#   back to disk.
+# ─────────────────────────────────────────────────────────────────────────────
+
 on:
   workflow_call:
     inputs:
@@ -8,23 +37,32 @@ on:
         required: false
         default: "ubuntu-latest"
         type: string
+
+      # ── Fix type selection ──────────────────────────────────────────────
       fix_python:
-        description: "Whether to run Python auto-formatting (black + isort)"
+        description: "Apply Python auto-fixes (Flake8+Bandit+Tests → Copilot API fix)"
         required: false
-        default: true
+        default: false
         type: boolean
+      fix_terraform:
+        description: "Apply Terraform auto-fixes (fmt, TFLint+Copilot)"
+        required: false
+        default: false
+        type: boolean
+
+      # ── Python-specific inputs ──────────────────────────────────────────
       python_version:
         description: "Python version"
-        default: "3.11"
+        default: "3.12"
         required: false
         type: string
       python_source_path:
-        description: "Relative path from repo root to the Python package root (where pyproject.toml lives)"
-        default: "shared/python"
+        description: "Relative path from repo root to the Python package root"
+        default: "."
         required: false
         type: string
       copilot_fix_flake8:
-        description: "Whether to attempt auto-fixing flake8 findings (unused imports via autoflake)"
+        description: "Whether Copilot should attempt to fix flake8 findings"
         required: false
         default: true
         type: boolean
@@ -41,27 +79,18 @@ on:
       test_modules:
         description: >
           JSON array of module names whose _test/ folders should be exercised.
+          Required when copilot_fix_tests is true.
           Example: '["logging","storage","xml_parser"]'
         default: "[]"
         required: false
         type: string
       extra_pip_packages:
-        description: "Space-separated pip packages to install for tests"
+        description: "Space-separated extra pip packages to install"
         default: ""
         required: false
         type: string
-      commit_user:
-        description: "Username which should be used for commits by github action"
-        default: "github-actions"
-        required: false
-        type: string
-      commit_email:
-        description: "Email which should be used for commits by github action"
-        default: "noreply@github.com"
-        required: false
-        type: string
       gh_wf_config_repo:
-        description: "Public repo where Python linting config is stored"
+        description: "Public repo where linting config is stored"
         default: "acai-solutions/github-workflow-configs"
         required: false
         type: string
@@ -71,167 +100,726 @@ on:
         required: false
         type: string
       python_config_path:
-        description: 'Path to python config in gh_wf_config_repo (e.g. "python")'
+        description: "Path to python config in gh_wf_config_repo (e.g. 'python')"
         default: "python"
         required: false
         type: string
-      fix_terraform:
-        description: "Whether to run Terraform auto-formatting (terraform fmt)"
-        required: false
-        default: false
-        type: boolean
+
+      # ── Terraform-specific inputs ───────────────────────────────────────
       tf_version:
-        description: "Terraform version to use for fmt"
+        description: "Terraform version for formatting"
         default: "latest"
         required: false
         type: string
+
+      # ── Common inputs ───────────────────────────────────────────────────
       max_copilot_attempts:
-        description: "Maximum number of Copilot fix iterations (reserved for future use)"
+        description: "Maximum number of Copilot fix iterations on _cop branch"
         required: false
         default: 3
         type: number
+      commit_user:
+        description: "Username for autofix commits"
+        default: "github-actions[bot]"
+        required: false
+        type: string
+      commit_email:
+        description: "Email for autofix commits"
+        default: "41898282+github-actions[bot]@users.noreply.github.com"
+        required: false
+        type: string
+
+    secrets:
+      GH_RELEASE_APP_ID:
+        description: "GitHub App ID for generating tokens that trigger workflows"
+        required: true
+      GH_RELEASE_APP_PRIVATE_KEY:
+        description: "GitHub App private key (PEM)"
+        required: true
+      ANTHROPIC_API_KEY:
+        description: "Anthropic API key for Claude-based code fixes"
+        required: true
 
     outputs:
       fixes_applied:
-        description: "true when at least one fix was committed to the _cop branch"
+        description: "Whether fixes were pushed to _cop branch"
         value: ${{ jobs.autofix.outputs.fixes_applied }}
+      fix_summary:
+        description: "Summary of applied fixes"
+        value: ${{ jobs.autofix.outputs.fix_summary }}
       cop_branch:
-        description: "Name of the _cop branch created for fixes"
-        value: ${{ jobs.autofix.outputs.cop_branch }}
+        description: "Name of the _cop branch"
+        value: ${{ jobs.guard.outputs.cop_branch }}
+      feature_branch:
+        description: "Name of the feature branch"
+        value: ${{ jobs.guard.outputs.feature_branch }}
+      iteration:
+        description: "Current iteration count after this run"
+        value: ${{ jobs.guard.outputs.iteration }}
 
 defaults:
   run:
     shell: bash
 
 jobs:
-  autofix:
+  # ── Guard: detect branch context and check iteration limit ──────────────
+  guard:
     runs-on: ${{ inputs.runner_type }}
     outputs:
-      fixes_applied: ${{ steps.commit.outputs.fixes_applied }}
-      cop_branch: ${{ steps.create_branch.outputs.cop_branch }}
-
+      should_run: ${{ steps.detect.outputs.should_run }}
+      is_cop_branch: ${{ steps.detect.outputs.is_cop_branch }}
+      current_branch: ${{ steps.detect.outputs.current_branch }}
+      cop_branch: ${{ steps.detect.outputs.cop_branch }}
+      feature_branch: ${{ steps.detect.outputs.feature_branch }}
+      iteration: ${{ steps.detect.outputs.iteration }}
+      reuse_artifacts: ${{ steps.detect.outputs.reuse_artifacts }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.ref || github.ref }}
-          token: ${{ github.token }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
           fetch-depth: 0
 
-      - name: Determine _cop branch name
-        id: create_branch
+      - name: Detect branch context and iteration count
+        id: detect
         run: |
-          SOURCE_BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
-          # Strip existing _cop suffix to avoid double-appending
-          BASE_BRANCH="${SOURCE_BRANCH%_cop}"
-          COP_BRANCH="${BASE_BRANCH}_cop"
+          CURRENT_BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
+
+          if [[ "${CURRENT_BRANCH}" == *_cop ]]; then
+            IS_COP=true
+            FEATURE_BRANCH="${CURRENT_BRANCH%_cop}"
+            COP_BRANCH="${CURRENT_BRANCH}"
+          else
+            IS_COP=false
+            FEATURE_BRANCH="${CURRENT_BRANCH}"
+            COP_BRANCH="${CURRENT_BRANCH}_cop"
+          fi
+
+          echo "current_branch=${CURRENT_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "is_cop_branch=${IS_COP}" >> "$GITHUB_OUTPUT"
+          echo "feature_branch=${FEATURE_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "cop_branch=${COP_BRANCH}" >> "$GITHUB_OUTPUT"
-          echo "source_branch=${SOURCE_BRANCH}" >> "$GITHUB_OUTPUT"
+
+          ITERATION=0
+          if [[ "${IS_COP}" == "true" ]]; then
+            git fetch origin "${FEATURE_BRANCH}" 2>/dev/null || true
+            DIVERGE=$(git merge-base HEAD "origin/${FEATURE_BRANCH}" 2>/dev/null || echo "")
+            if [[ -n "${DIVERGE}" ]]; then
+              ITERATION=$(git log --oneline "${DIVERGE}..HEAD" --grep="copilot-autofix: true" | wc -l | tr -d ' ')
+            fi
+          fi
+
+          echo "iteration=${ITERATION}" >> "$GITHUB_OUTPUT"
+
+          MAX=${{ inputs.max_copilot_attempts }}
+          if [[ "${ITERATION}" -ge "${MAX}" ]]; then
+            echo "🛑 Max iterations (${MAX}) reached on ${COP_BRANCH} — stopping"
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          # First iteration from feature branch: reuse upstream artifacts
+          # Subsequent iterations on _cop: must re-run (code has changed)
+          if [[ "${IS_COP}" == "false" ]]; then
+            echo "reuse_artifacts=true" >> "$GITHUB_OUTPUT"
+            echo "📦 First iteration — will reuse upstream check artifacts"
+          else
+            echo "reuse_artifacts=false" >> "$GITHUB_OUTPUT"
+            echo "🔄 _cop iteration ${ITERATION} — will re-run detection"
+          fi
+
+          echo "📌 Current branch:  ${CURRENT_BRANCH}"
+          echo "📌 Feature branch:  ${FEATURE_BRANCH}"
+          echo "📌 Cop branch:      ${COP_BRANCH}"
+          echo "📌 Is _cop branch:  ${IS_COP}"
+          echo "📌 Iteration:       ${ITERATION} / ${MAX}"
+          echo "📌 Fix Python:      ${{ inputs.fix_python }}"
+          echo "📌 Fix Terraform:   ${{ inputs.fix_terraform }}"
+
+  # ── Main autofix job — works on _cop branch ─────────────────────────────
+  autofix:
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true'
+    runs-on: ${{ inputs.runner_type }}
+    outputs:
+      fixes_applied: ${{ steps.commit.outputs.fixes_applied }}
+      fix_summary: ${{ steps.commit.outputs.fix_summary }}
+
+    steps:
+      - name: Generate GitHub App Token
+        id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_RELEASE_APP_ID }}
+          private-key: ${{ secrets.GH_RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.guard.outputs.current_branch }}
+          token: ${{ steps.app_token.outputs.token }}
+          fetch-depth: 0
+
+      # ── Create _cop branch (only if not already on it) ──────────────────
+      - name: "Setup _cop branch"
+        run: |
+          IS_COP="${{ needs.guard.outputs.is_cop_branch }}"
+          COP_BRANCH="${{ needs.guard.outputs.cop_branch }}"
 
           git config --local user.name "${{ inputs.commit_user }}"
           git config --local user.email "${{ inputs.commit_email }}"
 
-          # Create or reset the _cop branch from the current source
-          if git ls-remote --exit-code --heads origin "${COP_BRANCH}" > /dev/null 2>&1; then
-            echo "Branch ${COP_BRANCH} already exists — resetting to ${SOURCE_BRANCH}"
-            git checkout -B "${COP_BRANCH}"
+          if [[ "${IS_COP}" == "true" ]]; then
+            echo "🔄 Already on _cop branch — continuing with fixes"
           else
-            echo "Creating new branch ${COP_BRANCH}"
-            git checkout -b "${COP_BRANCH}"
+            git fetch origin
+            if git ls-remote --exit-code --heads origin "${COP_BRANCH}" >/dev/null 2>&1; then
+              echo "🔄 _cop branch exists remotely — checking out"
+              git checkout -b "${COP_BRANCH}" "origin/${COP_BRANCH}"
+            else
+              echo "🆕 Creating new _cop branch: ${COP_BRANCH}"
+              git checkout -b "${COP_BRANCH}"
+            fi
           fi
 
-      - name: Set up Python
-        if: ${{ inputs.fix_python || inputs.copilot_fix_flake8 || inputs.copilot_fix_tests }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ inputs.python_version }}
+          echo "✅ Working on branch: $(git branch --show-current)"
 
-      - name: Install fix tools
-        if: ${{ inputs.fix_python || inputs.copilot_fix_flake8 }}
+      # ════════════════════════════════════════════════════════════════════
+      # AI FIX HELPER — writes corrected files via Anthropic Claude API
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "Create AI fix helper"
+        if: inputs.fix_python
         run: |
-          pip install black isort autoflake
+          cat > /tmp/copilot_fix.py << 'HELPER_EOF'
+          """
+          AI Fix Helper — applies code fixes via the Anthropic Claude API.
 
-      - name: Apply Black formatting
-        if: ${{ inputs.fix_python }}
-        run: |
-          echo "Running Black auto-format..."
-          black .
-          echo "✅ Black formatting applied"
+          Sends source files + tool findings to Claude and writes corrected
+          files back to disk.
 
-      - name: Apply isort
-        if: ${{ inputs.fix_python }}
-        run: |
-          echo "Running isort..."
-          isort . --profile black
-          echo "✅ Import sorting applied"
+          Usage:
+              python copilot_fix.py flake8  <findings_json> <source_root>
+              python copilot_fix.py bandit  <findings_json> <source_root>
+              python copilot_fix.py tests   <pytest_output>  <source_root>
 
-      - name: Fetch Flake8 config
-        id: get_flake8_config
-        if: ${{ inputs.copilot_fix_flake8 }}
-        run: |
-          if [[ -f ".flake8" ]]; then
-            echo "Using local .flake8"
-            echo "config_source=local" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          Env: ANTHROPIC_API_KEY
+          """
+          import json, os, sys, re
 
-          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.python_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
+          def get_ai_fix(source_code, filepath, prompt, api_key):
+              """Call Anthropic Claude API and return the corrected file content."""
+              import urllib.request
 
-          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n 1)
-          CONTENT=$(echo "$HTTP_RESPONSE" | head -n -1)
+              system_prompt = (
+                  "You are a code fixing assistant. You receive a Python source file "
+                  "and a description of issues found by linting, security, or test tools. "
+                  "Return ONLY the complete corrected Python source file. "
+                  "No markdown fences, no explanations, no comments about changes. "
+                  "Preserve the overall structure, docstrings, and logic. "
+                  "Only fix the specific issues described. "
+                  "If you cannot fix an issue safely, leave that code unchanged."
+              )
 
-          if [[ "$HTTP_CODE" == "200" ]]; then
-            echo "$CONTENT" > .flake8
-            echo "config_source=remote" >> "$GITHUB_OUTPUT"
-          else
-            echo "config_source=none" >> "$GITHUB_OUTPUT"
-          fi
+              user_prompt = (
+                  f"File: {filepath}\n\n"
+                  f"Source code:\n```python\n{source_code}\n```\n\n"
+                  f"Issues to fix:\n{prompt}\n\n"
+                  f"Return the complete corrected file content only."
+              )
 
-      - name: Fix unused imports and trailing whitespace (autoflake)
-        if: ${{ inputs.copilot_fix_flake8 }}
-        run: |
-          echo "Running autoflake to remove unused imports and variables..."
-          autoflake \
-            --in-place \
-            --recursive \
-            --remove-unused-variables \
-            --remove-all-unused-imports \
-            .
-          echo "✅ autoflake fixes applied"
+              payload = json.dumps({
+                  "model": "claude-sonnet-4-20250514",
+                  "max_tokens": 8192,
+                  "system": system_prompt,
+                  "messages": [
+                      {"role": "user", "content": user_prompt}
+                  ],
+                  "temperature": 0.1,
+              }).encode()
 
-      - name: Set up Terraform
-        if: ${{ inputs.fix_terraform }}
+              req = urllib.request.Request(
+                  "https://api.anthropic.com/v1/messages",
+                  data=payload,
+                  headers={
+                      "Content-Type": "application/json",
+                      "x-api-key": api_key,
+                      "anthropic-version": "2023-06-01",
+                  },
+              )
+
+              try:
+                  with urllib.request.urlopen(req, timeout=120) as resp:
+                      data = json.loads(resp.read())
+
+                  # Extract text from content blocks
+                  content = ""
+                  for block in data.get("content", []):
+                      if block.get("type") == "text":
+                          content += block["text"]
+
+                  # Strip markdown fences if present
+                  content = re.sub(r'^```(?:python)?\s*\n', '', content)
+                  content = re.sub(r'\n```\s*$', '', content)
+                  return content.strip() + "\n"
+              except Exception as e:
+                  print(f"  ⚠️  Claude API error for {filepath}: {e}")
+                  return None
+
+
+          def resolve_path(filepath, source_root):
+              """Resolve a filepath, trying multiple strategies."""
+              candidates = [
+                  filepath,
+                  os.path.join(source_root, filepath),
+                  os.path.abspath(filepath),
+              ]
+              for c in candidates:
+                  if os.path.exists(c):
+                      return c
+              return None
+
+
+          def fix_flake8(findings_path, source_root, token):
+              try:
+                  with open(findings_path) as f:
+                      data = json.load(f)
+              except Exception:
+                  return 0
+
+              fixed = 0
+              for filepath, issues in data.items():
+                  if not issues:
+                      continue
+                  abs_path = resolve_path(filepath, source_root)
+                  if not abs_path:
+                      continue
+
+                  with open(abs_path) as f:
+                      source = f.read()
+
+                  findings_text = "\n".join(
+                      f"  Line {i['line_number']}:{i['column_number']} — {i['code']} {i['text']}"
+                      for i in issues[:20]
+                  )
+
+                  print(f"  📝 Fixing {len(issues)} flake8 finding(s) in {filepath}")
+                  result = get_ai_fix(source, filepath, f"Flake8 findings:\n{findings_text}", token)
+                  if result and result != source:
+                      with open(abs_path, "w") as f:
+                          f.write(result)
+                      print(f"  ✅ Fixed: {filepath}")
+                      fixed += 1
+                  else:
+                      print(f"  ⏭️  No changes for: {filepath}")
+              return fixed
+
+
+          def fix_bandit(findings_path, source_root, token):
+              try:
+                  with open(findings_path) as f:
+                      data = json.load(f)
+              except Exception:
+                  return 0
+
+              results = data.get("results", [])
+              if not results:
+                  return 0
+
+              by_file = {}
+              for r in results:
+                  by_file.setdefault(r.get("filename", ""), []).append(r)
+
+              fixed = 0
+              for filepath, issues in by_file.items():
+                  abs_path = resolve_path(filepath, source_root)
+                  if not abs_path:
+                      continue
+
+                  with open(abs_path) as f:
+                      source = f.read()
+
+                  findings_text = "\n".join(
+                      f"  Line {i['line_number']}: [{i['test_id']}] {i['issue_text']} "
+                      f"(Severity: {i['issue_severity']}, Confidence: {i['issue_confidence']})"
+                      for i in issues[:15]
+                  )
+
+                  print(f"  📝 Fixing {len(issues)} bandit finding(s) in {filepath}")
+                  result = get_ai_fix(source, filepath, f"Bandit security findings:\n{findings_text}", token)
+                  if result and result != source:
+                      with open(abs_path, "w") as f:
+                          f.write(result)
+                      print(f"  ✅ Fixed: {filepath}")
+                      fixed += 1
+                  else:
+                      print(f"  ⏭️  No changes for: {filepath}")
+              return fixed
+
+
+          def fix_tests(pytest_output_path, source_root, token):
+              try:
+                  with open(pytest_output_path) as f:
+                      pytest_output = f.read()
+              except Exception:
+                  print("  ⚠️  No pytest output found")
+                  return 0
+
+              if not pytest_output.strip():
+                  return 0
+
+              failed_tests = re.findall(r'FAILED\s+(\S+?)::(\S+)', pytest_output)
+              if not failed_tests:
+                  failed_tests = re.findall(r'(\S+\.py)::(\S+)\s+(?:FAILED|ERROR)', pytest_output)
+              if not failed_tests:
+                  print("  ⚠️  Could not parse failed test locations from pytest output")
+                  return 0
+
+              files_to_fix = {}
+              for test_file, test_name in failed_tests:
+                  abs_test = resolve_path(test_file, source_root)
+                  if abs_test:
+                      files_to_fix.setdefault(abs_test, []).append(f"FAILED {test_name}")
+
+                  source_file = test_file.replace("/_test/test_", "/").replace("_test/test_", "/")
+                  abs_source = resolve_path(source_file, source_root)
+                  if abs_source and abs_source != abs_test:
+                      files_to_fix.setdefault(abs_source, []).append(
+                          f"Test {test_name} in {test_file} failed"
+                      )
+
+              output_lines = pytest_output.strip().split("\n")
+              truncated = "\n".join(output_lines[-100:])
+
+              fixed = 0
+              for filepath, context_lines in files_to_fix.items():
+                  with open(filepath) as f:
+                      source = f.read()
+
+                  context = "\n".join(context_lines)
+                  prompt = (
+                      f"These test failures involve this file:\n{context}\n\n"
+                      f"Pytest output (last 100 lines):\n{truncated}\n\n"
+                      f"Fix the SOURCE CODE to make the tests pass. "
+                      f"If this IS a test file, only fix obvious test bugs "
+                      f"(wrong assertions, missing imports, typos) — "
+                      f"do NOT weaken or remove test assertions."
+                  )
+
+                  rel_path = os.path.relpath(filepath, source_root)
+                  print(f"  📝 Fixing test failures in {rel_path}")
+                  result = get_ai_fix(source, rel_path, prompt, token)
+                  if result and result != source:
+                      with open(filepath, "w") as f:
+                          f.write(result)
+                      print(f"  ✅ Fixed: {rel_path}")
+                      fixed += 1
+                  else:
+                      print(f"  ⏭️  No changes for: {rel_path}")
+              return fixed
+
+
+          def main():
+              if len(sys.argv) < 4:
+                  print(f"Usage: {sys.argv[0]} <flake8|bandit|tests> <findings_path> <source_root>")
+                  sys.exit(1)
+
+              mode, findings_path, source_root = sys.argv[1], sys.argv[2], sys.argv[3]
+
+              token = os.environ.get("ANTHROPIC_API_KEY", "")
+              if not token:
+                  print("⚠️  No ANTHROPIC_API_KEY set — skipping AI fixes")
+                  sys.exit(0)
+
+              fixes = {"flake8": fix_flake8, "bandit": fix_bandit, "tests": fix_tests}
+              fn = fixes.get(mode)
+              if not fn:
+                  print(f"Unknown mode: {mode}")
+                  sys.exit(1)
+
+              count = fn(findings_path, source_root, token)
+              print(f"\n🤖 Copilot {mode} fix: {count} file(s) modified")
+
+          if __name__ == "__main__":
+              main()
+          HELPER_EOF
+
+          echo "✅ Copilot fix helper created"
+
+      # ════════════════════════════════════════════════════════════════════
+      # TERRAFORM FIXES
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: Setup Terraform ${{ inputs.tf_version }}
+        if: inputs.fix_terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ inputs.tf_version }}
 
-      - name: Apply Terraform formatting
-        if: ${{ inputs.fix_terraform }}
+      - name: "TF Phase 1: terraform fmt"
+        id: tf_fmt
+        if: inputs.fix_terraform
         run: |
-          echo "Running terraform fmt..."
-          terraform fmt -recursive .
-          echo "✅ Terraform formatting applied"
+          if terraform fmt -check -recursive >/dev/null 2>&1; then
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+          else
+            terraform fmt -recursive
+            echo "changes=true" >> "$GITHUB_OUTPUT"
+            echo "✅ terraform fmt applied"
+          fi
 
-      - name: Install package and test dependencies
-        if: ${{ inputs.copilot_fix_tests && inputs.test_modules != '[]' }}
-        working-directory: ${{ inputs.python_source_path }}
+      - name: "TF Phase 2: Collect TFLint findings"
+        id: tf_lint_check
+        if: inputs.fix_terraform
+        continue-on-error: true
+        run: |
+          if command -v tflint &>/dev/null; then
+            tflint --format compact > /tmp/tflint-findings.txt 2>&1 || true
+            FINDING_COUNT=$(grep -c "Error\|Warning" /tmp/tflint-findings.txt 2>/dev/null || echo "0")
+            echo "finding_count=${FINDING_COUNT}" >> "$GITHUB_OUTPUT"
+            echo "📋 TFLint findings: ${FINDING_COUNT}"
+          else
+            echo "finding_count=0" >> "$GITHUB_OUTPUT"
+            echo "⚠️ TFLint not installed — skipping TFLint analysis"
+          fi
+
+      # ════════════════════════════════════════════════════════════════════
+      # PYTHON SETUP (always needed for AI fix phase)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: Set up Python ${{ inputs.python_version }}
+        if: inputs.fix_python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+
+      - name: Install Python tools
+        if: inputs.fix_python
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-cov
-          pip install -e .
+
+          # Always need these for _cop re-detection iterations
+          if [[ "${{ needs.guard.outputs.reuse_artifacts }}" == "false" ]]; then
+            pip install flake8 flake8-json bandit
+          fi
+
           if [[ -n "${{ inputs.extra_pip_packages }}" ]]; then
             pip install ${{ inputs.extra_pip_packages }}
           fi
 
-      - name: Run tests (diagnostic — fixes not auto-applied)
-        if: ${{ inputs.copilot_fix_tests && inputs.test_modules != '[]' }}
+          if [[ -f "${{ inputs.python_source_path }}/pyproject.toml" ]]; then
+            pip install -e "${{ inputs.python_source_path }}"
+          fi
+
+          if [[ "${{ inputs.copilot_fix_tests }}" == "true" && "${{ needs.guard.outputs.reuse_artifacts }}" == "false" ]]; then
+            pip install pytest pytest-cov
+          fi
+
+      # ════════════════════════════════════════════════════════════════════
+      # FIRST ITERATION: Download artifacts from upstream checks
+      # (Code is identical to what python_base/python_tests ran against)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "📦 Download flake8 report from upstream"
+        id: dl_flake8
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_flake8 &&
+          needs.guard.outputs.reuse_artifacts == 'true'
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: flake8-report
+          path: /tmp/upstream-artifacts
+
+      - name: "📦 Download bandit report from upstream"
+        id: dl_bandit
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_bandit &&
+          needs.guard.outputs.reuse_artifacts == 'true'
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: bandit-report
+          path: /tmp/upstream-artifacts
+
+      - name: "📦 Download pytest output from upstream"
+        id: dl_tests
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_tests &&
+          needs.guard.outputs.reuse_artifacts == 'true'
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: test-results-*
+          path: /tmp/upstream-test-artifacts
+          merge-multiple: true
+
+      - name: "📦 Prepare reused artifacts"
+        id: reuse_findings
+        if: needs.guard.outputs.reuse_artifacts == 'true' && inputs.fix_python
+        run: |
+          echo "📦 Checking downloaded upstream artifacts..."
+
+          # ── Flake8 ──
+          FLAKE8_COUNT=0
+          if [[ -f "/tmp/upstream-artifacts/flake8-report.json" ]]; then
+            cp /tmp/upstream-artifacts/flake8-report.json /tmp/flake8-findings.json
+            FLAKE8_COUNT=$(python3 -c "
+          import json
+          try:
+              with open('/tmp/flake8-findings.json') as f:
+                  data = json.load(f)
+              print(sum(len(v) for v in data.values()))
+          except Exception:
+              print(0)
+          ")
+            echo "  ✅ Reusing flake8 report: ${FLAKE8_COUNT} findings"
+          else
+            echo "  ⚠️ No flake8 artifact found"
+          fi
+          echo "flake8_count=${FLAKE8_COUNT}" >> "$GITHUB_OUTPUT"
+
+          # ── Bandit ──
+          BANDIT_COUNT=0
+          if [[ -f "/tmp/upstream-artifacts/bandit-report.json" ]]; then
+            cp /tmp/upstream-artifacts/bandit-report.json /tmp/bandit-findings.json
+            BANDIT_COUNT=$(python3 -c "
+          import json
+          try:
+              with open('/tmp/bandit-findings.json') as f:
+                  data = json.load(f)
+              print(len(data.get('results', [])))
+          except Exception:
+              print(0)
+          ")
+            echo "  ✅ Reusing bandit report: ${BANDIT_COUNT} findings"
+          else
+            echo "  ⚠️ No bandit artifact found"
+          fi
+          echo "bandit_count=${BANDIT_COUNT}" >> "$GITHUB_OUTPUT"
+
+          # ── Pytest output ──
+          TESTS_HAVE_FAILURES=false
+          if ls /tmp/upstream-test-artifacts/pytest-output-*.txt 1>/dev/null 2>&1; then
+            # Merge all per-module pytest outputs into one file
+            cat /tmp/upstream-test-artifacts/pytest-output-*.txt > /tmp/pytest-output.txt
+            if grep -qE 'FAILED|ERROR' /tmp/pytest-output.txt; then
+              TESTS_HAVE_FAILURES=true
+              echo "  ✅ Reusing pytest output: failures detected"
+            else
+              echo "  ✅ Reusing pytest output: all passing"
+            fi
+          else
+            echo "  ⚠️ No pytest output artifacts found"
+          fi
+          echo "tests_have_failures=${TESTS_HAVE_FAILURES}" >> "$GITHUB_OUTPUT"
+
+      # ════════════════════════════════════════════════════════════════════
+      # _COP ITERATIONS: Re-run detection (code has changed)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "PY: Ensure flake8 config is available"
+        id: flake8_config
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_flake8 &&
+          needs.guard.outputs.reuse_artifacts == 'false'
+        run: |
+          SOURCE_PATH="${{ inputs.python_source_path }}"
+
+          if [[ -f ".flake8" ]]; then
+            echo "Found local .flake8 in repository."
+            echo "config_source=local" >> "$GITHUB_OUTPUT"
+          else
+            echo "Fetching Flake8 config from: ${{ inputs.gh_wf_config_repo }}/${{ inputs.python_config_path }}/.flake8@${{ inputs.gh_wf_config_repo_ref }}"
+
+            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github.v3.raw" \
+              "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.python_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
+
+            HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n 1)
+            CONTENT=$(echo "$HTTP_RESPONSE" | head -n -1)
+
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              echo "$CONTENT" > .flake8
+              echo "✅ Downloaded .flake8 from central config repo"
+              echo "config_source=remote" >> "$GITHUB_OUTPUT"
+            else
+              echo "⚠️ No .flake8 found (HTTP $HTTP_CODE) — flake8 will use defaults"
+              echo "config_source=none" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          if [[ -f ".flake8" && "${SOURCE_PATH}" != "." ]]; then
+            cp .flake8 "${SOURCE_PATH}/.flake8"
+            echo "📋 Copied .flake8 to ${SOURCE_PATH}/"
+            echo "copied=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "copied=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "PY: Collect flake8 findings (re-run)"
+        id: flake8_check
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_flake8 &&
+          needs.guard.outputs.reuse_artifacts == 'false'
         working-directory: ${{ inputs.python_source_path }}
         continue-on-error: true
         run: |
-          echo "⚠️ copilot_fix_tests=true: running tests to surface failures."
-          echo "Automated test rewriting is not supported; results are for review only."
-          PKG=$(python -c "
+          flake8 . --format=json --output-file=/tmp/flake8-findings.json 2>/dev/null || true
+
+          FINDING_COUNT=$(python3 -c "
+          import json
+          try:
+              with open('/tmp/flake8-findings.json') as f:
+                  data = json.load(f)
+              print(sum(len(v) for v in data.values()))
+          except Exception:
+              print(0)
+          ")
+
+          echo "finding_count=$FINDING_COUNT" >> "$GITHUB_OUTPUT"
+          echo "📋 Flake8 findings: $FINDING_COUNT"
+
+      - name: "PY: Collect bandit findings (re-run)"
+        id: bandit_check
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_bandit &&
+          needs.guard.outputs.reuse_artifacts == 'false'
+        working-directory: ${{ inputs.python_source_path }}
+        continue-on-error: true
+        run: |
+          bandit -r . -f json -o /tmp/bandit-findings.json 2>/dev/null || true
+
+          FINDING_COUNT=$(python3 -c "
+          import json
+          try:
+              with open('/tmp/bandit-findings.json') as f:
+                  data = json.load(f)
+              print(len(data.get('results', [])))
+          except Exception:
+              print(0)
+          ")
+
+          echo "finding_count=$FINDING_COUNT" >> "$GITHUB_OUTPUT"
+          echo "📋 Bandit findings: $FINDING_COUNT"
+
+      - name: "PY: Run tests and capture failures (re-run)"
+        id: test_check
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_tests &&
+          needs.guard.outputs.reuse_artifacts == 'false'
+        working-directory: ${{ inputs.python_source_path }}
+        continue-on-error: true
+        run: |
+          PKG=$(python3 -c "
           try:
               import tomllib
           except ImportError:
@@ -239,47 +827,211 @@ jobs:
           with open('pyproject.toml','rb') as f:
               cfg = tomllib.load(f)
           print(cfg['project']['name'])
-          ")
-          for MODULE in $(echo '${{ inputs.test_modules }}' | python3 -c "import sys,json; [print(m) for m in json.load(sys.stdin)]"); do
-            echo "--- pytest: ${MODULE} ---"
-            pytest "${PKG}/${MODULE}/_test/" -v --tb=short || true
-          done
+          " 2>/dev/null || echo "")
 
-      - name: Commit fixes to _cop branch
-        id: commit
-        run: |
-          git config --local user.name "${{ inputs.commit_user }}"
-          git config --local user.email "${{ inputs.commit_email }}"
+          TEST_MODULES='${{ inputs.test_modules }}'
 
-          if [[ -z $(git status -s) ]]; then
-            echo "No changes to commit — no fixes were needed"
-            echo "fixes_applied=false" >> "$GITHUB_OUTPUT"
+          if [[ "${TEST_MODULES}" != "[]" && -n "${PKG}" ]]; then
+            echo "" > /tmp/pytest-output.txt
+            ALL_PASS=true
+
+            for MODULE in $(echo "${TEST_MODULES}" | python3 -c "import json,sys; [print(m) for m in json.load(sys.stdin)]"); do
+              TEST_DIR="${PKG}/${MODULE}/_test/"
+              if [[ -d "${TEST_DIR}" ]]; then
+                echo "🧪 Running tests: ${MODULE}" | tee -a /tmp/pytest-output.txt
+                if ! pytest "${TEST_DIR}" -v --tb=long --no-header 2>&1 | tee -a /tmp/pytest-output.txt; then
+                  ALL_PASS=false
+                fi
+              else
+                echo "⚠️ Test directory not found: ${TEST_DIR}" | tee -a /tmp/pytest-output.txt
+              fi
+            done
+
+            if [[ "${ALL_PASS}" == "true" ]]; then
+              echo "tests_pass=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "tests_pass=false" >> "$GITHUB_OUTPUT"
+              echo "📋 Test failures detected"
+            fi
           else
-            git add -A
-            git commit -m "fix(autofix): apply automated Python code fixes (black, isort, autoflake)"
-            echo "fixes_applied=true" >> "$GITHUB_OUTPUT"
-            echo "✅ Fixes committed to ${{ steps.create_branch.outputs.cop_branch }}"
+            if pytest --tb=long --no-header -v 2>&1 | tee /tmp/pytest-output.txt; then
+              echo "tests_pass=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "tests_pass=false" >> "$GITHUB_OUTPUT"
+              echo "📋 Test failures detected"
+            fi
           fi
 
-      - name: Push _cop branch
-        uses: ad-m/github-push-action@v1.0.0
-        with:
-          github_token: ${{ github.token }}
-          branch: ${{ steps.create_branch.outputs.cop_branch }}
-          force: true
+      # ════════════════════════════════════════════════════════════════════
+      # RESOLVE FINDING COUNTS (unified from artifact-reuse or re-run)
+      # ════════════════════════════════════════════════════════════════════
 
-      - name: Summary
+      - name: "Resolve finding counts"
+        id: findings
+        if: inputs.fix_python
+        run: |
+          # Flake8
+          if [[ "${{ needs.guard.outputs.reuse_artifacts }}" == "true" ]]; then
+            echo "flake8_count=${{ steps.reuse_findings.outputs.flake8_count }}" >> "$GITHUB_OUTPUT"
+            echo "bandit_count=${{ steps.reuse_findings.outputs.bandit_count }}" >> "$GITHUB_OUTPUT"
+            echo "tests_failing=${{ steps.reuse_findings.outputs.tests_have_failures }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "flake8_count=${{ steps.flake8_check.outputs.finding_count || '0' }}" >> "$GITHUB_OUTPUT"
+            echo "bandit_count=${{ steps.bandit_check.outputs.finding_count || '0' }}" >> "$GITHUB_OUTPUT"
+            echo "tests_failing=${{ steps.test_check.outputs.tests_pass == 'false' && 'true' || 'false' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ════════════════════════════════════════════════════════════════════
+      # COPILOT AI-BASED FIXES
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "AI Phase: Claude fix — flake8 findings"
+        id: copilot_flake8
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_flake8 &&
+          steps.findings.outputs.flake8_count != '0' &&
+          steps.findings.outputs.flake8_count != ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        working-directory: ${{ inputs.python_source_path }}
+        run: |
+          echo "🤖 Asking Claude to fix ${{ steps.findings.outputs.flake8_count }} flake8 findings..."
+          python3 /tmp/copilot_fix.py flake8 /tmp/flake8-findings.json "$(pwd)"
+
+          if [[ -n "$(git diff --name-only)" ]]; then
+            echo "copilot_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "copilot_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "AI Phase: Claude fix — bandit findings"
+        id: copilot_bandit
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_bandit &&
+          steps.findings.outputs.bandit_count != '0' &&
+          steps.findings.outputs.bandit_count != ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        working-directory: ${{ inputs.python_source_path }}
+        run: |
+          echo "🤖 Asking Claude to fix ${{ steps.findings.outputs.bandit_count }} bandit findings..."
+          python3 /tmp/copilot_fix.py bandit /tmp/bandit-findings.json "$(pwd)"
+
+          if [[ -n "$(git diff --name-only)" ]]; then
+            echo "copilot_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "copilot_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "AI Phase: Claude fix — test failures"
+        id: copilot_tests
+        if: >
+          inputs.fix_python &&
+          inputs.copilot_fix_tests &&
+          steps.findings.outputs.tests_failing == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        working-directory: ${{ inputs.python_source_path }}
+        run: |
+          echo "🤖 Asking Claude to fix test failures..."
+          python3 /tmp/copilot_fix.py tests /tmp/pytest-output.txt "$(pwd)"
+
+          if [[ -n "$(git diff --name-only)" ]]; then
+            echo "copilot_test_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "copilot_test_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ════════════════════════════════════════════════════════════════════
+      # COMMIT & PUSH
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "Clean up copied config files"
+        if: steps.flake8_config.outputs.copied == 'true'
+        run: |
+          SOURCE_PATH="${{ inputs.python_source_path }}"
+          rm -f "${SOURCE_PATH}/.flake8"
+          echo "🧹 Removed copied .flake8 from ${SOURCE_PATH}/"
+
+      - name: "Commit fixes on _cop branch"
+        id: commit
+        run: |
+          COP_BRANCH="${{ needs.guard.outputs.cop_branch }}"
+          ITERATION="${{ needs.guard.outputs.iteration }}"
+          NEXT=$((ITERATION + 1))
+
+          if [[ -z "$(git status -s)" ]]; then
+            echo "✅ No changes to commit (iteration ${NEXT})"
+            echo "fixes_applied=false" >> "$GITHUB_OUTPUT"
+            echo "fix_summary=No fixes needed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          SUMMARY=""
+          [[ "${{ steps.tf_fmt.outputs.changes }}" == "true" ]] && SUMMARY="${SUMMARY}tf-fmt "
+          [[ "${{ steps.copilot_flake8.outputs.copilot_changes }}" == "true" ]] && SUMMARY="${SUMMARY}copilot-flake8 "
+          [[ "${{ steps.copilot_bandit.outputs.copilot_changes }}" == "true" ]] && SUMMARY="${SUMMARY}copilot-bandit "
+          [[ "${{ steps.copilot_tests.outputs.copilot_test_changes }}" == "true" ]] && SUMMARY="${SUMMARY}copilot-tests "
+
+          git add -A
+          git commit -m "fix: auto-fix findings [${SUMMARY% }] (iteration ${NEXT})
+
+          copilot-autofix: true"
+
+          echo "fixes_applied=true" >> "$GITHUB_OUTPUT"
+          echo "fix_summary=${SUMMARY% }" >> "$GITHUB_OUTPUT"
+          echo "📝 Committed on ${COP_BRANCH} (iteration ${NEXT}): ${SUMMARY% }"
+
+      - name: "Push _cop branch → triggers CI recheck"
+        if: steps.commit.outputs.fixes_applied == 'true'
+        env:
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          COP_BRANCH="${{ needs.guard.outputs.cop_branch }}"
+          git remote set-url origin "https://x-access-token:${GH_APP_TOKEN}@github.com/${{ github.repository }}.git"
+          git push origin "HEAD:${COP_BRANCH}"
+          echo "✅ Pushed to ${COP_BRANCH} — CI re-triggers automatically"
+
+      # ── Summary ─────────────────────────────────────────────────────────
+      - name: Generate Summary
         if: always()
         run: |
-          echo '# 🤖 Copilot Autofix' >> $GITHUB_STEP_SUMMARY
+          COP_BRANCH="${{ needs.guard.outputs.cop_branch }}"
+          FEATURE_BRANCH="${{ needs.guard.outputs.feature_branch }}"
+          ITERATION="${{ needs.guard.outputs.iteration }}"
+          MAX="${{ inputs.max_copilot_attempts }}"
+          REUSE="${{ needs.guard.outputs.reuse_artifacts }}"
+
+          echo '# 🤖 Copilot Autofix Summary' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
-          echo "| Input | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| fix_python | ${{ inputs.fix_python }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| copilot_fix_flake8 | ${{ inputs.copilot_fix_flake8 }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| copilot_fix_bandit | ${{ inputs.copilot_fix_bandit }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| copilot_fix_tests | ${{ inputs.copilot_fix_tests }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| fix_terraform | ${{ inputs.fix_terraform }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| tf_version | ${{ inputs.tf_version }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| _cop branch | ${{ steps.create_branch.outputs.cop_branch }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| fixes_applied | ${{ steps.commit.outputs.fixes_applied }} |" >> $GITHUB_STEP_SUMMARY
+          echo "**_cop branch:** \`${COP_BRANCH}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Feature branch:** \`${FEATURE_BRANCH}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Iteration:** ${ITERATION} / ${MAX}" >> $GITHUB_STEP_SUMMARY
+          echo "**Detection source:** ${REUSE} == 'true' && '📦 Reused from upstream checks' || '🔄 Re-ran on _cop branch'" >> $GITHUB_STEP_SUMMARY
+          echo "**Fix types:** ${{ inputs.fix_python && 'Python' || '' }} ${{ inputs.fix_terraform && 'Terraform' || '' }}" >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '| Phase | Tool | Changes |' >> $GITHUB_STEP_SUMMARY
+          echo '|-------|------|---------|' >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ inputs.fix_terraform }}" == "true" ]]; then
+            echo "| Deterministic | terraform fmt | ${{ steps.tf_fmt.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ inputs.fix_python }}" == "true" ]]; then
+            echo "| Detection | Flake8 | ${{ steps.findings.outputs.flake8_count || '0' }} findings |" >> $GITHUB_STEP_SUMMARY
+            echo "| Detection | Bandit | ${{ steps.findings.outputs.bandit_count || '0' }} findings |" >> $GITHUB_STEP_SUMMARY
+            echo "| Detection | Tests | ${{ steps.findings.outputs.tests_failing == 'true' && '❌ Failures' || '✅ Passing / ⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| AI-based | Copilot (flake8) | ${{ steps.copilot_flake8.outputs.copilot_changes == 'true' && '✅ Applied' || '⏭️ Clean / Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| AI-based | Copilot (bandit) | ${{ steps.copilot_bandit.outputs.copilot_changes == 'true' && '✅ Applied' || '⏭️ Clean / Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| AI-based | Copilot (tests) | ${{ steps.copilot_tests.outputs.copilot_test_changes == 'true' && '✅ Applied' || '⏭️ Clean / Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo '' >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ steps.commit.outputs.fixes_applied }}" == "true" ]]; then
+            echo "**🔄 Fixes pushed to \`${COP_BRANCH}\` — CI re-triggers automatically.**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo '**✅ No additional fixes needed this iteration.**' >> $GITHUB_STEP_SUMMARY
+          fi
