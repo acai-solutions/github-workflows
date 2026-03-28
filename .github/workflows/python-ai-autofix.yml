@@ -376,19 +376,29 @@ jobs:
           echo "📋 Prompt:"
           cat /tmp/claude-fix-prompt.txt
 
+          # Write prompt content to GITHUB_OUTPUT for inline use in claude-code-action
+          {
+            echo "prompt_content<<PROMPT_EOF"
+            cat /tmp/claude-fix-prompt.txt
+            echo "PROMPT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       # ── Claude Code agent ───────────────────────────────────────────────
       - name: "🤖 Claude Code: Fix Python findings"
+        id: claude_fix
+        if: steps.prompt.outputs.has_work == 'true'
         uses: anthropics/claude-code-action@v1
         with:
-          prompt: "Follow the instructions in the prompt file."
-          prompt_file: "/tmp/claude-fix-prompt.txt"
+          prompt: |
+            ${{ steps.prompt.outputs.prompt_content }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ steps.app_token.outputs.token }}
           claude_args: >
-            --max-turns 30
+            --max-turns 15
             --model claude-sonnet-4-20250514
-            --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,LS,Bash(flake8:*),Bash(bandit:*),Bash(pytest:*),Bash(python:*),Bash(pip:*),Bash(cd:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(find:*),Bash(ls:*)"
+            --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,LS,Bash"
           track_progress: false
+          show_full_output: true
                 
       # ── Clean up, commit, push ──────────────────────────────────────────
       - name: Clean up temporary config
