@@ -215,7 +215,7 @@ jobs:
        needs.terraform_security.outputs.all_checks_passed != 'true' ||
        (needs.terraform_module_test.result != 'skipped' && needs.terraform_module_test.outputs.all_checks_passed != 'true')) &&
       !(needs.terraform_base.result == 'skipped' && needs.terraform_security.result == 'skipped' && needs.terraform_module_test.result == 'skipped')
-    uses: acai-solutions/github-workflows/.github/workflows/copilot-autofix.yml@main
+    uses: acai-solutions/github-workflows/.github/workflows/copilot-autofix.yml@py_test
     with:
       runner_type: ${{ inputs.runner_type }}
       fix_terraform: true
