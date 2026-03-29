@@ -106,7 +106,7 @@ jobs:
 
       # ── Terraform fmt ───────────────────────────────────────────────────
       - name: Setup Terraform ${{ inputs.tf_version }}
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ inputs.tf_version }}
 

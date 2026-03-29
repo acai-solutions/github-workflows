@@ -165,14 +165,15 @@ jobs:
           echo "feature_branch=${FEATURE}"  >> "$GITHUB_OUTPUT"
           echo "cop_branch=${COP}"          >> "$GITHUB_OUTPUT"
 
-          # Count previous autofix iterations
+          # Derive iteration count from scoped git tags (autofix/<cop>-iter-N)
+          # This is robust against manual commits containing any particular string.
           ITERATION=0
           if [[ "${IS_COP}" == "true" ]]; then
-            git fetch origin "${FEATURE}" 2>/dev/null || true
-            DIVERGE=$(git merge-base HEAD "origin/${FEATURE}" 2>/dev/null || echo "")
-            if [[ -n "${DIVERGE}" ]]; then
-              ITERATION=$(git log --oneline "${DIVERGE}..HEAD" \
-                --grep="copilot-autofix: true" | wc -l | tr -d ' ')
+            git fetch origin --tags 2>/dev/null || true
+            TAG_PREFIX="autofix/$(echo "${COP}" | tr '/' '-')-iter-"
+            LATEST=$(git tag -l "${TAG_PREFIX}*" --sort=version:refname | tail -1)
+            if [[ -n "${LATEST}" ]]; then
+              ITERATION="${LATEST##*-iter-}"
             fi
           fi
           echo "iteration=${ITERATION}" >> "$GITHUB_OUTPUT"
@@ -300,9 +301,11 @@ jobs:
             COUNT=$(wc -l < /tmp/flake8-findings.txt | tr -d ' ')
             echo "⚠️ ${COUNT} flake8 findings"
             echo "has_findings=true" >> "$GITHUB_OUTPUT"
+            echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
           else
             echo "✅ No flake8 findings"
             echo "has_findings=false" >> "$GITHUB_OUTPUT"
+            echo "count=0" >> "$GITHUB_OUTPUT"
           fi
 
       - name: "🤖 Claude: Fix flake8 findings"
@@ -343,6 +346,12 @@ jobs:
             --allowedTools Edit,MultiEdit,Write,Read,Glob,Grep,LS,Bash
           track_progress: false
           show_full_output: true
+
+      - name: "⚠️ Warn: flake8 Claude session incomplete"
+        if: always() && inputs.copilot_fix_flake8 && steps.run_flake8.outputs.has_findings == 'true' && steps.claude_flake8.outcome == 'failure'
+        run: |
+          echo "::warning::Claude flake8 session did not complete (max-turns or API error) — partial fixes may have been applied"
+          echo "⚠️ **Claude flake8 session incomplete** — hit max-turns or API error. Partial fixes may have been committed." >> $GITHUB_STEP_SUMMARY
 
       - name: Clean up copied .flake8
         if: inputs.copilot_fix_flake8
@@ -391,9 +400,11 @@ jobs:
             COUNT=$(grep -c "Issue:" /tmp/bandit-findings.txt || echo "0")
             echo "⚠️ ${COUNT} bandit findings"
             echo "has_findings=true" >> "$GITHUB_OUTPUT"
+            echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
           else
             echo "✅ No bandit findings"
             echo "has_findings=false" >> "$GITHUB_OUTPUT"
+            echo "count=0" >> "$GITHUB_OUTPUT"
           fi
 
       - name: "🤖 Claude: Fix bandit findings"
@@ -430,6 +441,12 @@ jobs:
             --allowedTools Edit,MultiEdit,Write,Read,Glob,Grep,LS,Bash
           track_progress: false
           show_full_output: true
+
+      - name: "⚠️ Warn: bandit Claude session incomplete"
+        if: always() && inputs.copilot_fix_bandit && steps.run_bandit.outputs.has_findings == 'true' && steps.claude_bandit.outcome == 'failure'
+        run: |
+          echo "::warning::Claude bandit session did not complete (max-turns or API error) — partial fixes may have been applied"
+          echo "⚠️ **Claude bandit session incomplete** — hit max-turns or API error. Partial fixes may have been committed." >> $GITHUB_STEP_SUMMARY
 
       - name: Commit bandit fixes
         id: commit_bandit
@@ -493,9 +510,11 @@ jobs:
             COUNT=$(grep -cE "^FAILED" /tmp/pytest-failures.txt || echo "0")
             echo "⚠️ ${COUNT} test failures"
             echo "has_failures=true" >> "$GITHUB_OUTPUT"
+            echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
           else
             echo "✅ All tests pass"
             echo "has_failures=false" >> "$GITHUB_OUTPUT"
+            echo "count=0" >> "$GITHUB_OUTPUT"
           fi
 
       - name: "🤖 Claude: Fix test failures"
@@ -530,6 +549,12 @@ jobs:
             --allowedTools Edit,MultiEdit,Write,Read,Glob,Grep,LS,Bash
           track_progress: false
           show_full_output: true
+
+      - name: "⚠️ Warn: tests Claude session incomplete"
+        if: always() && inputs.copilot_fix_tests && steps.run_pytest.outputs.has_failures == 'true' && steps.claude_tests.outcome == 'failure'
+        run: |
+          echo "::warning::Claude tests session did not complete (max-turns or API error) — partial fixes may have been applied"
+          echo "⚠️ **Claude tests session incomplete** — hit max-turns or API error. Partial fixes may have been committed." >> $GITHUB_STEP_SUMMARY
 
       - name: Commit test fixes
         id: commit_tests
@@ -582,10 +607,16 @@ jobs:
           GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
           COP="${{ needs.guard.outputs.cop_branch }}"
+          ITER="${{ needs.guard.outputs.iteration }}"
+          NEXT=$((ITER + 1))
+          TAG="autofix/$(echo "${COP}" | tr '/' '-')-iter-${NEXT}"
+
           git remote set-url origin \
             "https://x-access-token:${GH_APP_TOKEN}@github.com/${{ github.repository }}.git"
           git push origin "HEAD:${COP}"
-          echo "✅ Pushed ${COP}"
+          git tag "${TAG}"
+          git push origin "${TAG}"
+          echo "✅ Pushed ${COP} — tagged ${TAG}"
 
       - name: Create or update PR
         id: create_pr
@@ -605,10 +636,45 @@ jobs:
             echo "📎 PR already exists: ${EXISTING}"
             echo "pr_url=${EXISTING}" >> "$GITHUB_OUTPUT"
           else
-            # Build status lines
-            FLAKE8_LINE="| Flake8 | $([[ '${{ steps.commit_flake8.outputs.committed }}' == 'true' ]] && echo '✅ Fixed' || echo '${{ inputs.copilot_fix_flake8 }}' | grep -q true && echo '⏭️ No issues' || echo '—') |"
-            BANDIT_LINE="| Bandit | $([[ '${{ steps.commit_bandit.outputs.committed }}' == 'true' ]] && echo '✅ Fixed' || echo '${{ inputs.copilot_fix_bandit }}' | grep -q true && echo '⏭️ No issues' || echo '—') |"
-            TESTS_LINE="| Tests  | $([[ '${{ steps.commit_tests.outputs.committed }}' == 'true' ]] && echo '✅ Fixed' || echo '${{ inputs.copilot_fix_tests }}' | grep -q true && echo '⏭️ No failures' || echo '—') |"
+            # Build per-tool rows: "findings before → status"
+            if [[ "${{ inputs.copilot_fix_flake8 }}" == "true" ]]; then
+              BEFORE="${{ steps.run_flake8.outputs.count }}"
+              if [[ "${{ steps.commit_flake8.outputs.committed }}" == "true" ]]; then
+                FLAKE8_ROW="| Flake8 | ${BEFORE} findings | ✅ Fixes committed |"
+              elif [[ "${{ steps.claude_flake8.outcome }}" == "failure" ]]; then
+                FLAKE8_ROW="| Flake8 | ${BEFORE} findings | ⚠️ Session incomplete |"
+              else
+                FLAKE8_ROW="| Flake8 | 0 findings | ⏭️ Already clean |"
+              fi
+            else
+              FLAKE8_ROW="| Flake8 | — | ⏭️ Skipped |"
+            fi
+
+            if [[ "${{ inputs.copilot_fix_bandit }}" == "true" ]]; then
+              BEFORE="${{ steps.run_bandit.outputs.count }}"
+              if [[ "${{ steps.commit_bandit.outputs.committed }}" == "true" ]]; then
+                BANDIT_ROW="| Bandit | ${BEFORE} findings | ✅ Fixes committed |"
+              elif [[ "${{ steps.claude_bandit.outcome }}" == "failure" ]]; then
+                BANDIT_ROW="| Bandit | ${BEFORE} findings | ⚠️ Session incomplete |"
+              else
+                BANDIT_ROW="| Bandit | 0 findings | ⏭️ Already clean |"
+              fi
+            else
+              BANDIT_ROW="| Bandit | — | ⏭️ Skipped |"
+            fi
+
+            if [[ "${{ inputs.copilot_fix_tests }}" == "true" ]]; then
+              BEFORE="${{ steps.run_pytest.outputs.count }}"
+              if [[ "${{ steps.commit_tests.outputs.committed }}" == "true" ]]; then
+                TESTS_ROW="| Tests | ${BEFORE} failures | ✅ Fixes committed |"
+              elif [[ "${{ steps.claude_tests.outcome }}" == "failure" ]]; then
+                TESTS_ROW="| Tests | ${BEFORE} failures | ⚠️ Session incomplete |"
+              else
+                TESTS_ROW="| Tests | 0 failures | ⏭️ All passing |"
+              fi
+            else
+              TESTS_ROW="| Tests | — | ⏭️ Skipped |"
+            fi
 
             PR_URL=$(gh pr create \
               --head "${COP}" \
@@ -618,13 +684,13 @@ jobs:
 
           Automated fixes applied by Claude Code on \`${COP}\` → \`${FEATURE}\`.
 
-          | | |
-          |---|---|
-          | _cop branch | \`${COP}\` |
-          | Iteration | ${NEXT} / ${{ inputs.max_copilot_attempts }} |
-          ${FLAKE8_LINE}
-          ${BANDIT_LINE}
-          ${TESTS_LINE}
+          | | Findings | Result |
+          |---|---|---|
+          | _cop branch | \`${COP}\` | |
+          | Iteration | ${NEXT} / ${{ inputs.max_copilot_attempts }} | |
+          ${FLAKE8_ROW}
+          ${BANDIT_ROW}
+          ${TESTS_ROW}
 
           > Review and merge when CI passes on this branch.")
 
