@@ -4,19 +4,18 @@ name: Python AI Autofix (Claude Code)
 # Reusable workflow: Auto-fixes Python findings on a dedicated _cop branch
 # using Claude Code (anthropics/claude-code-action).
 #
-# Claude Code runs as a full agent with shell access — it reads files,
-# runs flake8/bandit/pytest, makes surgical edits, and verifies fixes
-# iteratively before handing back control.
+# Each tool (flake8, bandit, tests) runs as its own Claude session to keep
+# context windows small and failures isolated. After each session, changes
+# are committed separately. On completion a PR is opened: _cop → feature.
 #
 # Branch Strategy (_cop):
-#   feature branch fails → _cop created → fixes committed → push triggers CI
-#   _cop fails again    → next iteration → fixes committed → push triggers CI
-#   _cop passes         → caller creates PR (_cop → feature)
+#   feature branch fails → _cop created → fixes committed → PR opened
+#   _cop fails again    → next iteration → more commits → CI re-runs
+#   _cop passes         → merge PR (_cop → feature)
 #   max iterations hit  → stops (no infinite loop)
 #
 # Prerequisites:
 #   - ANTHROPIC_API_KEY org/repo secret
-#   - Claude GitHub App installed (github.com/apps/claude)
 #   - GH_RELEASE_APP_ID + GH_RELEASE_APP_PRIVATE_KEY secrets
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -120,6 +119,9 @@ on:
       iteration:
         description: "Current iteration count after this run"
         value: ${{ jobs.guard.outputs.iteration }}
+      pr_url:
+        description: "URL of the pull request from _cop to feature branch"
+        value: ${{ jobs.autofix.outputs.pr_url }}
 
 defaults:
   run:
@@ -192,8 +194,9 @@ jobs:
     if: needs.guard.outputs.should_run == 'true'
     runs-on: ${{ inputs.runner_type }}
     outputs:
-      fixes_applied: ${{ steps.commit.outputs.fixes_applied }}
-      fix_summary: ${{ steps.commit.outputs.fix_summary }}
+      fixes_applied: ${{ steps.set_outputs.outputs.fixes_applied }}
+      fix_summary: ${{ steps.set_outputs.outputs.fix_summary }}
+      pr_url: ${{ steps.create_pr.outputs.pr_url }}
 
     steps:
       # ── Auth + Checkout ─────────────────────────────────────────────────
@@ -256,10 +259,14 @@ jobs:
             pip install pytest pytest-cov
           fi
 
+      # ══════════════════════════════════════════════════════════════════════
+      # FLAKE8
+      # ══════════════════════════════════════════════════════════════════════
+
       - name: Fetch flake8 config
         if: inputs.copilot_fix_flake8
         run: |
-          SOURCE="${{ inputs.python_source_path }}"
+          SRC="${{ inputs.python_source_path }}"
 
           if [[ -f ".flake8" ]]; then
             echo "✅ Using local .flake8"
@@ -276,132 +283,67 @@ jobs:
             fi
           fi
 
-          # Copy to source path if separate from repo root
-          if [[ -f ".flake8" && "${SOURCE}" != "." ]]; then
-            cp .flake8 "${SOURCE}/.flake8"
+          if [[ -f ".flake8" && "${SRC}" != "." ]]; then
+            cp .flake8 "${SRC}/.flake8"
           fi
 
-      # ── Build prompt ────────────────────────────────────────────────────
-      - name: Build Claude Code prompt
-        id: prompt
+      - name: Run flake8
+        if: inputs.copilot_fix_flake8
+        id: run_flake8
         run: |
-          SRC="${{ inputs.python_source_path }}"
-          cat > /tmp/claude-fix-prompt.txt << 'PROMPT_HEADER'
-          You are fixing Python code quality and security issues.
-          PROMPT_HEADER
+          cd "${{ inputs.python_source_path }}"
+          flake8 . --format=default > /tmp/flake8-findings.txt 2>&1 || true
 
-          echo "" >> /tmp/claude-fix-prompt.txt
-          echo "Working directory: ${SRC}" >> /tmp/claude-fix-prompt.txt
-          echo "" >> /tmp/claude-fix-prompt.txt
-
-          HAS_WORK=false
-
-          # ── Flake8 section ──
-          if [[ "${{ inputs.copilot_fix_flake8 }}" == "true" ]]; then
-            cat >> /tmp/claude-fix-prompt.txt << FLAKE8_EOF
-          ## Flake8 Linting Fixes
-          1. cd ${SRC} && run: flake8 . --format=default
-          2. For each finding, edit the source file to fix the issue.
-          3. After fixing, re-run flake8 to verify no new issues were introduced.
-          4. Common fixes: remove unused imports (F401), remove unused variables (F841),
-             replace lambda assignments with def (E731), rename ambiguous variables (E741),
-             reduce function complexity by extracting helper functions (C901).
-
-          FLAKE8_EOF
-            HAS_WORK=true
+          if [[ -s /tmp/flake8-findings.txt ]]; then
+            COUNT=$(wc -l < /tmp/flake8-findings.txt | tr -d ' ')
+            echo "⚠️ ${COUNT} flake8 findings"
+            echo "has_findings=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ No flake8 findings"
+            echo "has_findings=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # ── Bandit section ──
-          if [[ "${{ inputs.copilot_fix_bandit }}" == "true" ]]; then
-            cat >> /tmp/claude-fix-prompt.txt << BANDIT_EOF
-          ## Bandit Security Fixes
-          1. cd ${SRC} && run: bandit -r . -f txt
-          2. Fix security findings where possible without changing behavior.
-          3. For hardcoded passwords/keys: use environment variables or config files.
-          4. For unsafe functions: replace with safe alternatives.
-          5. If a finding is a false positive (e.g. test fixtures), add # nosec BXXX.
-          6. After fixing, re-run bandit to verify findings are resolved.
-
-          BANDIT_EOF
-            HAS_WORK=true
-          fi
-
-          # ── Test section ──
-          if [[ "${{ inputs.copilot_fix_tests }}" == "true" ]]; then
-            echo "## Test Failure Fixes" >> /tmp/claude-fix-prompt.txt
-            echo "1. cd ${SRC} && run pytest to identify failures." >> /tmp/claude-fix-prompt.txt
-
-            TEST_MODULES='${{ inputs.test_modules }}'
-            if [[ "${TEST_MODULES}" != "[]" ]]; then
-              PKG=$(cd "${SRC}" && python3 -c "
-          try:
-              import tomllib
-          except ImportError:
-              import tomli as tomllib
-          with open('pyproject.toml','rb') as f:
-              cfg = tomllib.load(f)
-          print(cfg['project']['name'])
-          " 2>/dev/null || echo "")
-
-              if [[ -n "${PKG}" ]]; then
-                echo "   Run tests per module:" >> /tmp/claude-fix-prompt.txt
-                for MOD in $(echo "${TEST_MODULES}" | python3 -c "import json,sys; [print(m) for m in json.load(sys.stdin)]"); do
-                  echo "   - pytest ${PKG}/${MOD}/_test/ -v --tb=long" >> /tmp/claude-fix-prompt.txt
-                done
-              fi
-            fi
-
-            cat >> /tmp/claude-fix-prompt.txt << 'TESTS_EOF'
-          2. Fix the SOURCE CODE to make failing tests pass.
-          3. If a test file has obvious bugs (wrong imports, typos), fix those too.
-          4. Do NOT weaken, remove, or skip test assertions.
-          5. After fixing, re-run the failing tests to verify they pass.
-
-          TESTS_EOF
-            HAS_WORK=true
-          fi
-
-          # ── Rules ──
-          cat >> /tmp/claude-fix-prompt.txt << RULES_EOF
-          ## Important Rules
-          - Only edit files under ${SRC}/
-          - Do NOT add comments explaining your changes.
-          - Do NOT modify .flake8, pyproject.toml, or configuration files.
-          - Do NOT commit anything — just edit the files.
-          - Preserve existing code structure, docstrings, and formatting style.
-          RULES_EOF
-
-          echo "has_work=${HAS_WORK}" >> "$GITHUB_OUTPUT"
-
-          echo "📋 Prompt:"
-          cat /tmp/claude-fix-prompt.txt
-
-          # Write prompt content to GITHUB_OUTPUT for inline use in claude-code-action
-          {
-            echo "prompt_content<<PROMPT_EOF"
-            cat /tmp/claude-fix-prompt.txt
-            echo "PROMPT_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      # ── Claude Code agent ───────────────────────────────────────────────
-      - name: "🤖 Claude Code: Fix Python findings"
-        id: claude_fix
-        if: steps.prompt.outputs.has_work == 'true'
+      - name: "🤖 Claude: Fix flake8 findings"
+        id: claude_flake8
+        if: inputs.copilot_fix_flake8 && steps.run_flake8.outputs.has_findings == 'true'
+        continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
           prompt: |
-            ${{ steps.prompt.outputs.prompt_content }}
+            Fix all flake8 findings in /tmp/flake8-findings.txt.
+
+            Working directory: ${{ inputs.python_source_path }}
+
+            Steps:
+            1. Read /tmp/flake8-findings.txt to see every finding.
+            2. For each finding, edit the source file to fix the issue.
+            3. Re-run: cd ${{ inputs.python_source_path }} && flake8 . --format=default
+            4. Iterate until flake8 is clean.
+
+            Common fixes:
+            - F401 unused import → remove the import line
+            - F841 unused variable → remove the assignment or use the variable
+            - E731 lambda assignment → replace with a def statement
+            - E741 ambiguous name → rename to a descriptive name
+            - C901 too complex → extract helper functions
+
+            Rules:
+            - Only edit files under ${{ inputs.python_source_path }}/
+            - Do NOT modify .flake8, pyproject.toml, or any config file.
+            - Do NOT add comments explaining your changes.
+            - Do NOT commit anything — just edit files.
+            - Preserve existing docstrings and formatting style.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ steps.app_token.outputs.token }}
           claude_args: >
-            --max-turns 15
-            --model claude-sonnet-4-20250514
-            --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,LS,Bash"
+            --max-turns 20
+            --model claude-haiku-4-5-20251001
+            --allowedTools Edit,MultiEdit,Write,Read,Glob,Grep,LS,Bash
           track_progress: false
           show_full_output: true
-                
-      # ── Clean up, commit, push ──────────────────────────────────────────
-      - name: Clean up temporary config
+
+      - name: Clean up copied .flake8
+        if: inputs.copilot_fix_flake8
         run: |
           SRC="${{ inputs.python_source_path }}"
           if [[ "${SRC}" != "." && -f "${SRC}/.flake8" ]]; then
@@ -411,33 +353,229 @@ jobs:
             fi
           fi
 
-      - name: Commit fixes
-        id: commit
+      - name: Commit flake8 fixes
+        id: commit_flake8
+        if: inputs.copilot_fix_flake8
         run: |
-          COP="${{ needs.guard.outputs.cop_branch }}"
           ITER="${{ needs.guard.outputs.iteration }}"
           NEXT=$((ITER + 1))
 
           if [[ -z "$(git status -s)" ]]; then
-            echo "✅ No changes (iteration ${NEXT})"
-            echo "fixes_applied=false" >> "$GITHUB_OUTPUT"
-            echo "fix_summary=No fixes needed" >> "$GITHUB_OUTPUT"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ No flake8 changes to commit"
             exit 0
           fi
 
-          COUNT=$(git diff --name-only | wc -l | tr -d ' ')
-
+          COUNT=$(git status -s | wc -l | tr -d ' ')
           git add -A
-          git commit -m "fix: Claude Code Python auto-fix (${COUNT} files, iteration ${NEXT})
+          git commit -m "fix(flake8): Claude Code autofix (${COUNT} files, iteration ${NEXT})
 
           copilot-autofix: true"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+          echo "📝 Committed flake8 fixes: ${COUNT} files"
 
-          echo "fixes_applied=true" >> "$GITHUB_OUTPUT"
-          echo "fix_summary=claude-code-${COUNT}-files" >> "$GITHUB_OUTPUT"
-          echo "📝 ${COP} iteration ${NEXT}: ${COUNT} files changed"
+      # ══════════════════════════════════════════════════════════════════════
+      # BANDIT
+      # ══════════════════════════════════════════════════════════════════════
+
+      - name: Run bandit
+        if: inputs.copilot_fix_bandit
+        id: run_bandit
+        run: |
+          cd "${{ inputs.python_source_path }}"
+          bandit -r . -f txt > /tmp/bandit-findings.txt 2>&1 || true
+
+          if grep -q "Issue:" /tmp/bandit-findings.txt; then
+            COUNT=$(grep -c "Issue:" /tmp/bandit-findings.txt || echo "0")
+            echo "⚠️ ${COUNT} bandit findings"
+            echo "has_findings=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ No bandit findings"
+            echo "has_findings=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "🤖 Claude: Fix bandit findings"
+        id: claude_bandit
+        if: inputs.copilot_fix_bandit && steps.run_bandit.outputs.has_findings == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            Fix all security findings in /tmp/bandit-findings.txt.
+
+            Working directory: ${{ inputs.python_source_path }}
+
+            Steps:
+            1. Read /tmp/bandit-findings.txt to see every finding.
+            2. Fix each issue without changing observable behavior.
+            3. For hardcoded secrets: replace with os.environ lookups or config files.
+            4. For unsafe functions: replace with safe alternatives.
+            5. If a finding is a confirmed false positive (e.g. test fixtures): add # nosec BXXX with the exact code.
+            6. Re-run: cd ${{ inputs.python_source_path }} && bandit -r . -f txt
+            7. Iterate until no fixable findings remain.
+
+            Rules:
+            - Only edit files under ${{ inputs.python_source_path }}/
+            - Do NOT modify pyproject.toml or any config file.
+            - Do NOT add explanatory comments (# nosec comments are allowed).
+            - Do NOT commit anything — just edit files.
+            - Preserve existing code structure and docstrings.
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app_token.outputs.token }}
+          claude_args: >
+            --max-turns 20
+            --model claude-haiku-4-5-20251001
+            --allowedTools Edit,MultiEdit,Write,Read,Glob,Grep,LS,Bash
+          track_progress: false
+          show_full_output: true
+
+      - name: Commit bandit fixes
+        id: commit_bandit
+        if: inputs.copilot_fix_bandit
+        run: |
+          ITER="${{ needs.guard.outputs.iteration }}"
+          NEXT=$((ITER + 1))
+
+          if [[ -z "$(git status -s)" ]]; then
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ No bandit changes to commit"
+            exit 0
+          fi
+
+          COUNT=$(git status -s | wc -l | tr -d ' ')
+          git add -A
+          git commit -m "fix(bandit): Claude Code autofix (${COUNT} files, iteration ${NEXT})
+
+          copilot-autofix: true"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+          echo "📝 Committed bandit fixes: ${COUNT} files"
+
+      # ══════════════════════════════════════════════════════════════════════
+      # TESTS
+      # ══════════════════════════════════════════════════════════════════════
+
+      - name: Run pytest
+        if: inputs.copilot_fix_tests
+        id: run_pytest
+        run: |
+          SRC="${{ inputs.python_source_path }}"
+          TEST_MODULES='${{ inputs.test_modules }}'
+          PYTEST_PATHS=""
+
+          if [[ "${TEST_MODULES}" != "[]" ]]; then
+            PKG=$(cd "${SRC}" && python3 -c "
+          try:
+              import tomllib
+          except ImportError:
+              import tomli as tomllib
+          with open('pyproject.toml','rb') as f:
+              cfg = tomllib.load(f)
+          print(cfg['project']['name'])
+          " 2>/dev/null || echo "")
+
+            if [[ -n "${PKG}" ]]; then
+              for MOD in $(echo "${TEST_MODULES}" | python3 -c "import json,sys; [print(m) for m in json.load(sys.stdin)]"); do
+                PYTEST_PATHS="${PYTEST_PATHS} ${PKG}/${MOD}/_test/"
+              done
+            fi
+          fi
+
+          cd "${SRC}"
+          if [[ -n "${PYTEST_PATHS}" ]]; then
+            python -m pytest ${PYTEST_PATHS} -v --tb=long > /tmp/pytest-failures.txt 2>&1 || true
+          else
+            python -m pytest . -v --tb=long > /tmp/pytest-failures.txt 2>&1 || true
+          fi
+
+          if grep -qE "^FAILED" /tmp/pytest-failures.txt; then
+            COUNT=$(grep -cE "^FAILED" /tmp/pytest-failures.txt || echo "0")
+            echo "⚠️ ${COUNT} test failures"
+            echo "has_failures=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ All tests pass"
+            echo "has_failures=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "🤖 Claude: Fix test failures"
+        id: claude_tests
+        if: inputs.copilot_fix_tests && steps.run_pytest.outputs.has_failures == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            Fix the failing tests listed in /tmp/pytest-failures.txt.
+
+            Working directory: ${{ inputs.python_source_path }}
+
+            Steps:
+            1. Read /tmp/pytest-failures.txt to identify every failure.
+            2. Fix the SOURCE CODE to make the failing tests pass.
+            3. If a test file has obvious bugs (wrong imports, typos), fix those too.
+            4. Re-run the specific failing tests to verify they pass.
+            5. Iterate until all previously failing tests pass.
+
+            Rules:
+            - Only edit files under ${{ inputs.python_source_path }}/
+            - Do NOT weaken, remove, or skip test assertions.
+            - Do NOT add comments explaining your changes.
+            - Do NOT commit anything — just edit files.
+            - Preserve existing code structure and docstrings.
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app_token.outputs.token }}
+          claude_args: >
+            --max-turns 20
+            --model claude-sonnet-4-6
+            --allowedTools Edit,MultiEdit,Write,Read,Glob,Grep,LS,Bash
+          track_progress: false
+          show_full_output: true
+
+      - name: Commit test fixes
+        id: commit_tests
+        if: inputs.copilot_fix_tests
+        run: |
+          ITER="${{ needs.guard.outputs.iteration }}"
+          NEXT=$((ITER + 1))
+
+          if [[ -z "$(git status -s)" ]]; then
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ No test changes to commit"
+            exit 0
+          fi
+
+          COUNT=$(git status -s | wc -l | tr -d ' ')
+          git add -A
+          git commit -m "fix(tests): Claude Code autofix (${COUNT} files, iteration ${NEXT})
+
+          copilot-autofix: true"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+          echo "📝 Committed test fixes: ${COUNT} files"
+
+      # ══════════════════════════════════════════════════════════════════════
+      # PUSH + PR
+      # ══════════════════════════════════════════════════════════════════════
+
+      - name: Aggregate outputs
+        id: set_outputs
+        run: |
+          F="${{ steps.commit_flake8.outputs.committed }}"
+          B="${{ steps.commit_bandit.outputs.committed }}"
+          T="${{ steps.commit_tests.outputs.committed }}"
+
+          if [[ "${F}" == "true" || "${B}" == "true" || "${T}" == "true" ]]; then
+            echo "fixes_applied=true" >> "$GITHUB_OUTPUT"
+            PARTS=()
+            [[ "${F}" == "true" ]] && PARTS+=("flake8")
+            [[ "${B}" == "true" ]] && PARTS+=("bandit")
+            [[ "${T}" == "true" ]] && PARTS+=("tests")
+            printf -v SUMMARY '%s,' "${PARTS[@]}"
+            echo "fix_summary=claude-code:${SUMMARY%,}" >> "$GITHUB_OUTPUT"
+          else
+            echo "fixes_applied=false" >> "$GITHUB_OUTPUT"
+            echo "fix_summary=No fixes needed" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Push _cop branch
-        if: steps.commit.outputs.fixes_applied == 'true'
+        if: steps.set_outputs.outputs.fixes_applied == 'true'
         env:
           GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
@@ -445,7 +583,52 @@ jobs:
           git remote set-url origin \
             "https://x-access-token:${GH_APP_TOKEN}@github.com/${{ github.repository }}.git"
           git push origin "HEAD:${COP}"
-          echo "✅ Pushed ${COP} — CI re-triggers"
+          echo "✅ Pushed ${COP}"
+
+      - name: Create or update PR
+        id: create_pr
+        if: steps.set_outputs.outputs.fixes_applied == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          COP="${{ needs.guard.outputs.cop_branch }}"
+          FEATURE="${{ needs.guard.outputs.feature_branch }}"
+          ITER="${{ needs.guard.outputs.iteration }}"
+          NEXT=$((ITER + 1))
+
+          EXISTING=$(gh pr list --head "${COP}" --base "${FEATURE}" \
+            --json url -q '.[0].url' 2>/dev/null || echo "")
+
+          if [[ -n "${EXISTING}" ]]; then
+            echo "📎 PR already exists: ${EXISTING}"
+            echo "pr_url=${EXISTING}" >> "$GITHUB_OUTPUT"
+          else
+            # Build status lines
+            FLAKE8_LINE="| Flake8 | $([[ '${{ steps.commit_flake8.outputs.committed }}' == 'true' ]] && echo '✅ Fixed' || echo '${{ inputs.copilot_fix_flake8 }}' | grep -q true && echo '⏭️ No issues' || echo '—') |"
+            BANDIT_LINE="| Bandit | $([[ '${{ steps.commit_bandit.outputs.committed }}' == 'true' ]] && echo '✅ Fixed' || echo '${{ inputs.copilot_fix_bandit }}' | grep -q true && echo '⏭️ No issues' || echo '—') |"
+            TESTS_LINE="| Tests  | $([[ '${{ steps.commit_tests.outputs.committed }}' == 'true' ]] && echo '✅ Fixed' || echo '${{ inputs.copilot_fix_tests }}' | grep -q true && echo '⏭️ No failures' || echo '—') |"
+
+            PR_URL=$(gh pr create \
+              --head "${COP}" \
+              --base "${FEATURE}" \
+              --title "fix: Python autofix for \`${FEATURE}\` (iteration ${NEXT})" \
+              --body "## 🤖 Python AI Autofix (Claude Code)
+
+          Automated fixes applied by Claude Code on \`${COP}\` → \`${FEATURE}\`.
+
+          | | |
+          |---|---|
+          | _cop branch | \`${COP}\` |
+          | Iteration | ${NEXT} / ${{ inputs.max_copilot_attempts }} |
+          ${FLAKE8_LINE}
+          ${BANDIT_LINE}
+          ${TESTS_LINE}
+
+          > Review and merge when CI passes on this branch.")
+
+            echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+            echo "✅ Created PR: ${PR_URL}"
+          fi
 
       # ── Summary ─────────────────────────────────────────────────────────
       - name: Summary
@@ -458,7 +641,8 @@ jobs:
           echo "| _cop branch | \`${{ needs.guard.outputs.cop_branch }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Feature branch | \`${{ needs.guard.outputs.feature_branch }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Iteration | ${{ needs.guard.outputs.iteration }} / ${{ inputs.max_copilot_attempts }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Flake8 | ${{ inputs.copilot_fix_flake8 && '✅' || '⏭️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Bandit | ${{ inputs.copilot_fix_bandit && '✅' || '⏭️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tests | ${{ inputs.copilot_fix_tests && '✅' || '⏭️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Result | ${{ steps.commit.outputs.fixes_applied == 'true' && '🔄 Fixes pushed' || '✅ No changes' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Flake8 | ${{ inputs.copilot_fix_flake8 && '✅' || '⏭️' }} — committed: ${{ steps.commit_flake8.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Bandit | ${{ inputs.copilot_fix_bandit && '✅' || '⏭️' }} — committed: ${{ steps.commit_bandit.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests  | ${{ inputs.copilot_fix_tests && '✅' || '⏭️' }} — committed: ${{ steps.commit_tests.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Fixes applied | ${{ steps.set_outputs.outputs.fixes_applied || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PR | ${{ steps.create_pr.outputs.pr_url || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
