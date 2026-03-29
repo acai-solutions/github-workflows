@@ -193,6 +193,8 @@ jobs:
     needs: guard
     if: needs.guard.outputs.should_run == 'true'
     runs-on: ${{ inputs.runner_type }}
+    permissions:
+      pull-requests: write
     outputs:
       fixes_applied: ${{ steps.set_outputs.outputs.fixes_applied }}
       fix_summary: ${{ steps.set_outputs.outputs.fix_summary }}
@@ -589,7 +591,7 @@ jobs:
         id: create_pr
         if: steps.set_outputs.outputs.fixes_applied == 'true'
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           COP="${{ needs.guard.outputs.cop_branch }}"
           FEATURE="${{ needs.guard.outputs.feature_branch }}"
