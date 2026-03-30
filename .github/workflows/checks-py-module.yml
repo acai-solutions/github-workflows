@@ -148,7 +148,7 @@ jobs:
 
   # ── Pytest per module ───────────────────────────────────────────────
   python_tests:
-    if: ${{ inputs.py_testing_include && inputs.test_modules != '[]' }}
+    if: ${{ inputs.py_testing_include && inputs.py_test_modules != '[]' }}
     uses: ./.github/workflows/python-test.yml
     with:
       runner_type: ${{ inputs.runner_type }}

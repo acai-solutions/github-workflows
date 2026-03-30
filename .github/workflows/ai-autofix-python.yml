@@ -69,7 +69,7 @@ on:
         default: "[]"
         required: false
         type: string
-      py_test_extra_pip_packages:
+      extra_pip_packages:
         description: "Space-separated extra pip packages to install"
         default: ""
         required: false
@@ -173,7 +173,7 @@ jobs:
           fi
           echo "iteration=${ITERATION}" >> "$GITHUB_OUTPUT"
 
-          MAX=${{ inputs.ai_autofix_max_attempts }}
+          MAX=${{ inputs.py_ai_autofix_max_attempts }}
           if [[ "${ITERATION}" -ge "${MAX}" ]]; then
             echo "🛑 Max iterations (${MAX}) reached — stopping"
             echo "should_run=false" >> "$GITHUB_OUTPUT"
@@ -253,7 +253,7 @@ jobs:
             pip install -e "${{ inputs.py_source_path }}"
           fi
 
-          if [[ "${{ inputs.ai_autofix_tests }}" == "true" ]]; then
+          if [[ "${{ inputs.py_ai_autofix_tests }}" == "true" ]]; then
             pip install pytest pytest-cov
           fi
 
@@ -262,7 +262,7 @@ jobs:
       # ══════════════════════════════════════════════════════════════════════
 
       - name: Fetch flake8 config
-        if: inputs.ai_autofix_flake8
+        if: inputs.py_ai_autofix_flake8
         run: |
           SRC="${{ inputs.py_source_path }}"
 
@@ -286,7 +286,7 @@ jobs:
           fi
 
       - name: Run flake8
-        if: inputs.ai_autofix_flake8
+        if: inputs.py_ai_autofix_flake8
         id: run_flake8
         run: |
           cd "${{ inputs.py_source_path }}"
@@ -305,7 +305,7 @@ jobs:
 
       - name: "🤖 Claude: Fix flake8 findings"
         id: claude_flake8
-        if: inputs.ai_autofix_flake8 && steps.run_flake8.outputs.has_findings == 'true'
+        if: inputs.py_ai_autofix_flake8 && steps.run_flake8.outputs.has_findings == 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
@@ -343,13 +343,13 @@ jobs:
           show_full_output: true
 
       - name: "⚠️ Warn: flake8 Claude session incomplete"
-        if: always() && inputs.ai_autofix_flake8 && steps.run_flake8.outputs.has_findings == 'true' && steps.claude_flake8.outcome == 'failure'
+        if: always() && inputs.py_ai_autofix_flake8 && steps.run_flake8.outputs.has_findings == 'true' && steps.claude_flake8.outcome == 'failure'
         run: |
           echo "::warning::Claude flake8 session did not complete (max-turns or API error) — partial fixes may have been applied"
           echo "⚠️ **Claude flake8 session incomplete** — hit max-turns or API error. Partial fixes may have been committed." >> $GITHUB_STEP_SUMMARY
 
       - name: Clean up copied .flake8
-        if: inputs.ai_autofix_flake8
+        if: inputs.py_ai_autofix_flake8
         run: |
           SRC="${{ inputs.py_source_path }}"
           if [[ "${SRC}" != "." && -f "${SRC}/.flake8" ]]; then
@@ -361,7 +361,7 @@ jobs:
 
       - name: Commit flake8 fixes
         id: commit_flake8
-        if: inputs.ai_autofix_flake8
+        if: inputs.py_ai_autofix_flake8
         run: |
           ITER="${{ needs.guard.outputs.iteration }}"
           NEXT=$((ITER + 1))
@@ -385,7 +385,7 @@ jobs:
       # ══════════════════════════════════════════════════════════════════════
 
       - name: Run bandit
-        if: inputs.ai_autofix_bandit
+        if: inputs.py_ai_autofix_bandit
         id: run_bandit
         run: |
           cd "${{ inputs.py_source_path }}"
@@ -404,7 +404,7 @@ jobs:
 
       - name: "🤖 Claude: Fix bandit findings"
         id: claude_bandit
-        if: inputs.ai_autofix_bandit && steps.run_bandit.outputs.has_findings == 'true'
+        if: inputs.py_ai_autofix_bandit && steps.run_bandit.outputs.has_findings == 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
@@ -438,14 +438,14 @@ jobs:
           show_full_output: true
 
       - name: "⚠️ Warn: bandit Claude session incomplete"
-        if: always() && inputs.ai_autofix_bandit && steps.run_bandit.outputs.has_findings == 'true' && steps.claude_bandit.outcome == 'failure'
+        if: always() && inputs.py_ai_autofix_bandit && steps.run_bandit.outputs.has_findings == 'true' && steps.claude_bandit.outcome == 'failure'
         run: |
           echo "::warning::Claude bandit session did not complete (max-turns or API error) — partial fixes may have been applied"
           echo "⚠️ **Claude bandit session incomplete** — hit max-turns or API error. Partial fixes may have been committed." >> $GITHUB_STEP_SUMMARY
 
       - name: Commit bandit fixes
         id: commit_bandit
-        if: inputs.ai_autofix_bandit
+        if: inputs.py_ai_autofix_bandit
         run: |
           ITER="${{ needs.guard.outputs.iteration }}"
           NEXT=$((ITER + 1))
@@ -469,11 +469,11 @@ jobs:
       # ══════════════════════════════════════════════════════════════════════
 
       - name: Run pytest
-        if: inputs.ai_autofix_tests
+        if: inputs.py_ai_autofix_tests
         id: run_pytest
         run: |
           SRC="${{ inputs.py_source_path }}"
-          TEST_MODULES='${{ inputs.test_modules }}'
+          TEST_MODULES='${{ inputs.py_test_modules }}'
           PYTEST_PATHS=""
 
           if [[ "${TEST_MODULES}" != "[]" ]]; then
@@ -514,7 +514,7 @@ jobs:
 
       - name: "🤖 Claude: Fix test failures"
         id: claude_tests
-        if: inputs.ai_autofix_tests && steps.run_pytest.outputs.has_failures == 'true'
+        if: inputs.py_ai_autofix_tests && steps.run_pytest.outputs.has_failures == 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
@@ -546,14 +546,14 @@ jobs:
           show_full_output: true
 
       - name: "⚠️ Warn: tests Claude session incomplete"
-        if: always() && inputs.ai_autofix_tests && steps.run_pytest.outputs.has_failures == 'true' && steps.claude_tests.outcome == 'failure'
+        if: always() && inputs.py_ai_autofix_tests && steps.run_pytest.outputs.has_failures == 'true' && steps.claude_tests.outcome == 'failure'
         run: |
           echo "::warning::Claude tests session did not complete (max-turns or API error) — partial fixes may have been applied"
           echo "⚠️ **Claude tests session incomplete** — hit max-turns or API error. Partial fixes may have been committed." >> $GITHUB_STEP_SUMMARY
 
       - name: Commit test fixes
         id: commit_tests
-        if: inputs.ai_autofix_tests
+        if: inputs.py_ai_autofix_tests
         run: |
           ITER="${{ needs.guard.outputs.iteration }}"
           NEXT=$((ITER + 1))
@@ -627,10 +627,10 @@ jobs:
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| _cop branch | \`${{ needs.guard.outputs.ai_branch }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Feature branch | \`${{ needs.guard.outputs.feature_branch }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Iteration | ${{ needs.guard.outputs.iteration }} / ${{ inputs.ai_autofix_max_attempts }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Flake8 | ${{ inputs.ai_autofix_flake8 && '✅' || '⏭️' }} — committed: ${{ steps.commit_flake8.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Bandit | ${{ inputs.ai_autofix_bandit && '✅' || '⏭️' }} — committed: ${{ steps.commit_bandit.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tests  | ${{ inputs.ai_autofix_tests && '✅' || '⏭️' }} — committed: ${{ steps.commit_tests.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Iteration | ${{ needs.guard.outputs.iteration }} / ${{ inputs.py_ai_autofix_max_attempts }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Flake8 | ${{ inputs.py_ai_autofix_flake8 && '✅' || '⏭️' }} — committed: ${{ steps.commit_flake8.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Bandit | ${{ inputs.py_ai_autofix_bandit && '✅' || '⏭️' }} — committed: ${{ steps.commit_bandit.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests  | ${{ inputs.py_ai_autofix_tests && '✅' || '⏭️' }} — committed: ${{ steps.commit_tests.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Fixes applied | ${{ steps.set_outputs.outputs.fixes_applied || 'false' }} |" >> $GITHUB_STEP_SUMMARY
 
   # ── Create PR: _ai → feature ──────────────────────────────────────────
