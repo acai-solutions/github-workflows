@@ -77,26 +77,31 @@ on:
         type: string
 
       # ── AI Autofix (optional) ───────────────────────────────────────────
-      ai_autofix_include:
-        description: "Whether to run AI autofix on _cop branch when checks fail"
+      py_ai_autofix_include:
+        description: "Whether to run Python AI autofix on _cop branch when checks fail"
         required: false
         default: false
         type: boolean
-      ai_autofix_flake8:
-        description: "Whether Claude should fix flake8 findings"
+      py_ai_autofix_flake8:
+        description: "Whether to fix flake8 findings (Python)"
         required: false
         default: true
         type: boolean
-      ai_autofix_bandit:
-        description: "Whether Claude should fix bandit findings"
+      py_ai_autofix_bandit:
+        description: "Whether to fix bandit findings (Python)"
         required: false
         default: true
         type: boolean
-      ai_autofix_tests:
-        description: "Whether Claude should fix failing tests"
+      py_ai_autofix_tests:
+        description: "Whether to fix failing tests (Python)"
         required: false
         default: false
         type: boolean
+      py_ai_autofix_max_attempts:
+        description: "Maximum number of Python autofix iterations on _cop branch"
+        required: false
+        default: 3
+        type: number
 
     outputs:
       all_steps_passed:
@@ -160,7 +165,7 @@ jobs:
       - python_tests
     if: |
       always() &&
-      inputs.ai_autofix_include &&
+      inputs.py_ai_autofix_include &&
       (needs.python_base.outputs.all_steps_passed != 'true' ||
        needs.python_tests.outputs.all_tests_passed != 'true') &&
       !(needs.python_base.result == 'skipped' &&
@@ -177,9 +182,10 @@ jobs:
       py_lint_config_path: ${{ inputs.py_lint_config_path }}
       py_test_modules: ${{ inputs.py_test_modules }}
       py_test_extra_pip_packages: ${{ inputs.py_test_extra_pip_packages }}
-      ai_autofix_flake8: ${{ inputs.ai_autofix_flake8 }}
-      ai_autofix_bandit: ${{ inputs.ai_autofix_bandit }}
-      ai_autofix_tests: ${{ inputs.ai_autofix_tests }}
+      py_ai_autofix_flake8: ${{ inputs.py_ai_autofix_flake8 }}
+      py_ai_autofix_bandit: ${{ inputs.py_ai_autofix_bandit }}
+      py_ai_autofix_tests: ${{ inputs.py_ai_autofix_tests }}
+      py_ai_autofix_max_attempts: ${{ inputs.py_ai_autofix_max_attempts }}
     secrets: inherit
 
   # ── Summary gate ────────────────────────────────────────────────────

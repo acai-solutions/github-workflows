@@ -34,11 +34,59 @@ on:
         default: main
         required: false
         type: string
-      ai_autofix_include:
-        description: "Whether to run AI autofix on _cop branch when checks fail"
+      # ── Python AI Autofix (optional) ───────────────────────────────
+      py_ai_autofix_include:
+        description: "Whether to run Python AI autofix on _cop branch when checks fail"
         required: false
         default: false
         type: boolean
+      py_ai_autofix_flake8:
+        description: "Whether to fix flake8 findings (Python)"
+        required: false
+        default: true
+        type: boolean
+      py_ai_autofix_bandit:
+        description: "Whether to fix bandit findings (Python)"
+        required: false
+        default: true
+        type: boolean
+      py_ai_autofix_tests:
+        description: "Whether to fix failing tests (Python)"
+        required: false
+        default: false
+        type: boolean
+      py_ai_autofix_max_attempts:
+        description: "Maximum number of Python autofix iterations on _cop branch"
+        required: false
+        default: 3
+        type: number
+
+      # ── Terraform AI Autofix (optional) ───────────────────────────
+      tf_ai_autofix_include:
+        description: "Whether to run Terraform AI autofix on _cop branch when checks fail"
+        required: false
+        default: false
+        type: boolean
+      tf_ai_autofix_tflint:
+        description: "Whether to fix TFLint findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_trivy:
+        description: "Whether to fix Trivy findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_checkov:
+        description: "Whether to fix Checkov findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_max_attempts:
+        description: "Maximum number of Terraform autofix iterations on _cop branch"
+        required: false
+        default: 3
+        type: number
 
       # ── Python ────────────────────────────────────────────────────────────
       py_version:
@@ -219,10 +267,11 @@ jobs:
       py_testing_include: ${{ inputs.py_testing_include }}
       py_test_modules: ${{ inputs.py_test_modules }}
       py_test_extra_pip_packages: ${{ inputs.py_test_extra_pip_packages }}
-      ai_autofix_include: ${{ inputs.ai_autofix_include }}
-      ai_autofix_flake8: ${{ inputs.py_ai_autofix_flake8 }}
-      ai_autofix_bandit: ${{ inputs.py_ai_autofix_bandit }}
-      ai_autofix_tests: ${{ inputs.py_ai_autofix_tests }}
+      py_ai_autofix_include: ${{ inputs.py_ai_autofix_include }}
+      py_ai_autofix_flake8: ${{ inputs.py_ai_autofix_flake8 }}
+      py_ai_autofix_bandit: ${{ inputs.py_ai_autofix_bandit }}
+      py_ai_autofix_tests: ${{ inputs.py_ai_autofix_tests }}
+      py_ai_autofix_max_attempts: ${{ inputs.py_ai_autofix_max_attempts }}
     secrets: inherit
 
   # 2) Then run Terraform checks (only if Python passed)
@@ -250,7 +299,11 @@ jobs:
       test_bed_aws_esc_terratest_config: ${{ inputs.tf_test_bed_aws_esc_terratest_config }}
       terratest_path: ${{ inputs.tf_terratest_path }}
       terratest_examples_path: ${{ inputs.tf_terratest_examples_path }}
-      ai_autofix_include: ${{ inputs.ai_autofix_include }}
+      tf_ai_autofix_include: ${{ inputs.tf_ai_autofix_include }}
+      tf_ai_autofix_tflint: ${{ inputs.tf_ai_autofix_tflint }}
+      tf_ai_autofix_trivy: ${{ inputs.tf_ai_autofix_trivy }}
+      tf_ai_autofix_checkov: ${{ inputs.tf_ai_autofix_checkov }}
+      tf_ai_autofix_max_attempts: ${{ inputs.tf_ai_autofix_max_attempts }}
     secrets: inherit
 
   tf_py_checks_summary:

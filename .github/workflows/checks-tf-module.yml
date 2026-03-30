@@ -119,12 +119,32 @@ on:
         required: false
         type: string
 
-      # AI Autofix (optional)
-      ai_autofix_include:
-        description: "Whether to run terraform-ai-autofix on _cop branch when checks fail"
+      # ── AI Autofix (optional) ───────────────────────────────────────────
+      tf_ai_autofix_include:
+        description: "Whether to run Terraform AI autofix on _cop branch when checks fail"
         required: false
         default: false
         type: boolean
+      tf_ai_autofix_tflint:
+        description: "Whether to fix TFLint findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_trivy:
+        description: "Whether to fix Trivy findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_checkov:
+        description: "Whether to fix Checkov findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_max_attempts:
+        description: "Maximum number of Terraform autofix iterations on _cop branch"
+        required: false
+        default: 3
+        type: number
 
     outputs:
       all_checks_passed:
@@ -202,7 +222,7 @@ jobs:
       - terraform_module_test
     if: |
       always() &&
-      inputs.ai_autofix_include &&
+      inputs.tf_ai_autofix_include &&
       (needs.terraform_base.outputs.all_checks_passed != 'true' ||
        needs.terraform_security.outputs.all_checks_passed != 'true' ||
        (needs.terraform_module_test.result != 'skipped' &&
@@ -216,6 +236,10 @@ jobs:
       tf_version: ${{ inputs.tf_version }}
       commit_user: ${{ inputs.commit_user }}
       commit_email: ${{ inputs.commit_email }}
+      tf_ai_autofix_tflint: ${{ inputs.tf_ai_autofix_tflint }}
+      tf_ai_autofix_trivy: ${{ inputs.tf_ai_autofix_trivy }}
+      tf_ai_autofix_checkov: ${{ inputs.tf_ai_autofix_checkov }}
+      tf_ai_autofix_max_attempts: ${{ inputs.tf_ai_autofix_max_attempts }}
     secrets: inherit
 
   # ── Summary gate ────────────────────────────────────────────────────

@@ -25,6 +25,26 @@ on:
         default: "latest"
         required: false
         type: string
+      tf_ai_autofix_tflint:
+        description: "Whether to fix TFLint findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_trivy:
+        description: "Whether to fix Trivy findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_checkov:
+        description: "Whether to fix Checkov findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_max_attempts:
+        description: "Maximum number of Terraform autofix iterations on _cop branch"
+        required: false
+        default: 3
+        type: number
       commit_user:
         description: "Username for autofix commits"
         default: "github-actions[bot]"

@@ -74,23 +74,23 @@ on:
         default: ""
         required: false
         type: string
-      ai_autofix_flake8:
-        description: "Whether Claude should fix flake8 findings"
+      py_ai_autofix_flake8:
+        description: "Whether to fix flake8 findings (Python)"
         required: false
         default: true
         type: boolean
-      ai_autofix_bandit:
-        description: "Whether Claude should fix bandit findings"
+      py_ai_autofix_bandit:
+        description: "Whether to fix bandit findings (Python)"
         required: false
         default: true
         type: boolean
-      ai_autofix_tests:
-        description: "Whether Claude should fix failing tests"
+      py_ai_autofix_tests:
+        description: "Whether to fix failing tests (Python)"
         required: false
         default: false
         type: boolean
-      ai_autofix_max_attempts:
-        description: "Maximum number of fix iterations on _cop branch"
+      py_ai_autofix_max_attempts:
+        description: "Maximum number of Python autofix iterations on _cop branch"
         required: false
         default: 3
         type: number
