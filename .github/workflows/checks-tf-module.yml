@@ -153,7 +153,7 @@ jobs:
   # ── Base: format + docs ─────────────────────────────────────────────
   terraform_base:
     if: ${{ always() }}
-    uses: acai-solutions/github-workflows/.github/workflows/tf-base.yml@main
+    uses: ./.github/workflows/tf-base.yml
     with:
       concurrency_group: ${{ inputs.concurrency_group }}
       runner_type: ${{ inputs.runner_type }}
@@ -166,7 +166,7 @@ jobs:
   terraform_security:
     needs: terraform_base
     if: ${{ needs.terraform_base.result == 'success' }}
-    uses: acai-solutions/github-workflows/.github/workflows/tf-security.yml@main
+    uses: ./.github/workflows/tf-security.yml
     with:
       concurrency_group: ${{ inputs.concurrency_group }}
       runner_type: ${{ inputs.runner_type }}
@@ -183,7 +183,7 @@ jobs:
   terraform_module_test:
     needs: terraform_security
     if: ${{ inputs.terratest_run_tests && needs.terraform_security.outputs.all_checks_passed == 'true' }}
-    uses: acai-solutions/github-workflows/.github/workflows/tf-module-test.yml@main
+    uses: ./.github/workflows/tf-module-test.yml
     with:
       terratest_config_repo: ${{ inputs.gh_wf_config_repo }}
       terratest_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
@@ -210,7 +210,7 @@ jobs:
       !(needs.terraform_base.result == 'skipped' &&
         needs.terraform_security.result == 'skipped' &&
         needs.terraform_module_test.result == 'skipped')
-    uses: ./.github/workflows/ai-autofix/terraform-ai-autofix.yml
+    uses: ./.github/workflows/ai-autofix-terraform.yml
     with:
       runner_type: ${{ inputs.runner_type }}
       tf_version: ${{ inputs.tf_version }}

@@ -174,7 +174,7 @@ jobs:
   create_cop_pr:
     needs: [autofix]
     if: needs.autofix.outputs.fixes_applied == 'true'
-    uses: ./.github/workflows/ai-autofix/create-cop-pr.yml
+    uses: ./.github/workflows/ai-autofix-create-cop-pr.yml
     with:
       runner_type: ${{ inputs.runner_type }}
       app_id: GH_RELEASE_APP_ID

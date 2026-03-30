@@ -127,7 +127,7 @@ jobs:
   # ── Quality checks (Black, isort, Flake8, Bandit) ───────────────────
   python_base:
     if: ${{ always() }}
-    uses: ./.github/workflows/python/python-base.yml
+    uses: ./.github/workflows/python-base.yml
     with:
       concurrency_group: ${{ inputs.concurrency_group }}
       runner_type: ${{ inputs.runner_type }}
@@ -144,7 +144,7 @@ jobs:
   # ── Pytest per module ───────────────────────────────────────────────
   python_tests:
     if: ${{ inputs.testing_include && inputs.test_modules != '[]' }}
-    uses: ./.github/workflows/python/python-test.yml
+    uses: ./.github/workflows/python-test.yml
     with:
       runner_type: ${{ inputs.runner_type }}
       python_version: ${{ inputs.python_version }}
@@ -165,7 +165,7 @@ jobs:
        needs.python_tests.outputs.all_tests_passed != 'true') &&
       !(needs.python_base.result == 'skipped' &&
         needs.python_tests.result == 'skipped')
-    uses: ./.github/workflows/ai-autofix/python-ai-autofix.yml
+    uses: ./.github/workflows/ai-autofix-python.yml
     with:
       runner_type: ${{ inputs.runner_type }}
       python_version: ${{ inputs.python_version }}
