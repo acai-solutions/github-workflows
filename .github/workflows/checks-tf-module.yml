@@ -210,84 +210,13 @@ jobs:
       !(needs.terraform_base.result == 'skipped' &&
         needs.terraform_security.result == 'skipped' &&
         needs.terraform_module_test.result == 'skipped')
-    uses: acai-solutions/github-workflows/.github/workflows/terraform-ai-autofix.yml@py_test
+    uses: ./.github/workflows/ai-autofix/terraform-ai-autofix.yml
     with:
       runner_type: ${{ inputs.runner_type }}
       tf_version: ${{ inputs.tf_version }}
       commit_user: ${{ inputs.commit_user }}
       commit_email: ${{ inputs.commit_email }}
     secrets: inherit
-
-  # ── Create PR: _cop → feature (when checks pass on _cop) ───────────
-  create_cop_pr:
-    needs:
-      - terraform_base
-      - terraform_security
-      - terraform_module_test
-    runs-on: ${{ inputs.runner_type }}
-    if: |
-      always() &&
-      inputs.autofix_include &&
-      endsWith(github.ref_name, '_cop') &&
-      needs.terraform_base.outputs.all_checks_passed == 'true' &&
-      needs.terraform_security.outputs.all_checks_passed == 'true' &&
-      (needs.terraform_module_test.result == 'skipped' ||
-       needs.terraform_module_test.outputs.all_checks_passed == 'true')
-    steps:
-      - name: Generate GitHub App Token
-        id: app_token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.GH_RELEASE_APP_ID }}
-          private-key: ${{ secrets.GH_RELEASE_APP_PRIVATE_KEY }}
-
-      - name: "Create PR: _cop → feature branch"
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.app_token.outputs.token }}
-          script: |
-            const copBranch = context.ref.replace('refs/heads/', '');
-            const featureBranch = copBranch.replace(/_cop$/, '');
-
-            core.info(`_cop: ${copBranch} → feature: ${featureBranch}`);
-
-            const { data: existing } = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              head: `${context.repo.owner}:${copBranch}`,
-              base: featureBranch,
-              state: 'open',
-            });
-
-            if (existing.length > 0) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing[0].number,
-                body: `✅ **All checks passed** on \`${copBranch}\`.\n\nThis PR is ready for review and merge.`,
-              });
-              core.info(`Updated existing PR: ${existing[0].html_url}`);
-            } else {
-              const { data: pr } = await github.rest.pulls.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: `fix: Auto-Fixes for \`${featureBranch}\``,
-                head: copBranch,
-                base: featureBranch,
-                body: [
-                  '## 🤖 AI Auto-Fix PR',
-                  '',
-                  `Automatic Terraform formatting fixes for branch \`${featureBranch}\`.`,
-                  `All checks passed on \`${copBranch}\`.`,
-                  '',
-                  '**Please review and merge when satisfied.**',
-                  '',
-                  '---',
-                  '_Created by the AI Autofix CI pipeline._',
-                ].join('\n'),
-              });
-              core.info(`PR created: ${pr.html_url}`);
-            }
 
   # ── Summary gate ────────────────────────────────────────────────────
   tf_module_checks_summary:
@@ -296,7 +225,6 @@ jobs:
       - terraform_security
       - terraform_module_test
       - terraform_ai_autofix
-      - create_cop_pr
     runs-on: ${{ inputs.runner_type }}
     if: always()
     steps:
@@ -312,7 +240,6 @@ jobs:
             echo "| 🧪 Terratest | ${{ needs.terraform_module_test.outputs.all_checks_passed == 'true' && '✅' || needs.terraform_module_test.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           fi
           echo "| 🤖 AI Autofix | ${{ needs.terraform_ai_autofix.outputs.fixes_applied == 'true' && '✅ Applied' || needs.terraform_ai_autofix.result == 'skipped' && '⏭️' || '—' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📋 _cop PR | ${{ needs.create_cop_pr.result == 'success' && '✅' || needs.create_cop_pr.result == 'skipped' && '⏭️' || '—' }} |" >> $GITHUB_STEP_SUMMARY
 
       - name: Gate
         if: always()

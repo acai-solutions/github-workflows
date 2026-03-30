@@ -49,6 +49,9 @@ on:
       cop_branch:
         description: "Name of the _cop branch"
         value: ${{ jobs.autofix.outputs.cop_branch }}
+      feature_branch:
+        description: "Name of the feature branch"
+        value: ${{ jobs.autofix.outputs.feature_branch }}
 
 defaults:
   run:
@@ -60,6 +63,7 @@ jobs:
     outputs:
       fixes_applied: ${{ steps.commit.outputs.fixes_applied }}
       cop_branch: ${{ steps.branch.outputs.cop_branch }}
+      feature_branch: ${{ steps.branch.outputs.feature_branch }}
 
     steps:
       # ── Auth + Checkout ─────────────────────────────────────────────────
@@ -86,6 +90,7 @@ jobs:
           COP="${BASE}_cop"
 
           echo "cop_branch=${COP}" >> "$GITHUB_OUTPUT"
+          echo "feature_branch=${BASE}" >> "$GITHUB_OUTPUT"
 
           git config --local user.name  "${{ inputs.commit_user }}"
           git config --local user.email "${{ inputs.commit_email }}"
@@ -164,3 +169,25 @@ jobs:
           echo "| _cop branch | \`${{ steps.branch.outputs.cop_branch }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| terraform fmt | ${{ steps.tf_fmt.outputs.changes == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Result | ${{ steps.commit.outputs.fixes_applied == 'true' && '🔄 Fixes pushed' || '✅ No changes' }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ── Create PR: _cop → feature ──────────────────────────────────────────
+  create_cop_pr:
+    needs: [autofix]
+    if: needs.autofix.outputs.fixes_applied == 'true'
+    uses: ./.github/workflows/ai-autofix/create-cop-pr.yml
+    with:
+      runner_type: ${{ inputs.runner_type }}
+      app_id: GH_RELEASE_APP_ID
+      app_private_key: GH_RELEASE_APP_PRIVATE_KEY
+      pr_title: "fix: Terraform autofix für `${{ needs.autofix.outputs.feature_branch }}`"
+      pr_body: |
+        ## 🤖 Terraform AI Autofix
+
+        Automatic `terraform fmt` fixes applied on `${{ needs.autofix.outputs.cop_branch }}` → `${{ needs.autofix.outputs.feature_branch }}`.
+
+        > Review and merge when CI passes on this branch.
+      pr_ready_comment: |
+        ✅ **All checks passed** on `${{ needs.autofix.outputs.cop_branch }}`.
+
+        This PR is ready for review and merge.
+    secrets: inherit

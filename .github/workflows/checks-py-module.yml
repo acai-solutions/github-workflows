@@ -127,7 +127,7 @@ jobs:
   # ── Quality checks (Black, isort, Flake8, Bandit) ───────────────────
   python_base:
     if: ${{ always() }}
-    uses: acai-solutions/github-workflows/.github/workflows/python-base.yml@main
+    uses: ./.github/workflows/python/python-base.yml
     with:
       concurrency_group: ${{ inputs.concurrency_group }}
       runner_type: ${{ inputs.runner_type }}
@@ -144,7 +144,7 @@ jobs:
   # ── Pytest per module ───────────────────────────────────────────────
   python_tests:
     if: ${{ inputs.testing_include && inputs.test_modules != '[]' }}
-    uses: acai-solutions/github-workflows/.github/workflows/python-test.yml@py_test
+    uses: ./.github/workflows/python/python-test.yml
     with:
       runner_type: ${{ inputs.runner_type }}
       python_version: ${{ inputs.python_version }}
@@ -165,7 +165,7 @@ jobs:
        needs.python_tests.outputs.all_tests_passed != 'true') &&
       !(needs.python_base.result == 'skipped' &&
         needs.python_tests.result == 'skipped')
-    uses: acai-solutions/github-workflows/.github/workflows/python-ai-autofix.yml@py_test
+    uses: ./.github/workflows/ai-autofix/python-ai-autofix.yml
     with:
       runner_type: ${{ inputs.runner_type }}
       python_version: ${{ inputs.python_version }}
@@ -182,65 +182,12 @@ jobs:
       python_config_path: ${{ inputs.python_lint_config_path }}
     secrets: inherit
 
-  # ── Strip _cop suffix to derive feature branch name ─────────────────
-  prep_cop_pr:
-    needs:
-      - python_base
-      - python_tests
-      - python_ai_autofix
-    if: |
-      always() &&
-      inputs.autofix_include &&
-      endsWith(github.ref_name, '_cop') &&
-      (needs.python_base.outputs.all_steps_passed == 'true' || needs.python_base.result == 'skipped') &&
-      (needs.python_tests.outputs.all_tests_passed == 'true' || needs.python_tests.result == 'skipped')
-    runs-on: ${{ inputs.runner_type }}
-    outputs:
-      feature_branch: ${{ steps.strip.outputs.feature_branch }}
-    steps:
-      - name: Derive feature branch
-        id: strip
-        run: echo "feature_branch=${GITHUB_REF_NAME%_cop}" >> "$GITHUB_OUTPUT"
-
-  # ── Create PR: _cop → feature (when checks pass on _cop) ───────────
-  create_cop_pr:
-    needs:
-      - python_base
-      - python_tests
-      - python_ai_autofix
-      - prep_cop_pr
-    if: needs.prep_cop_pr.result == 'success'
-    uses: acai-solutions/github-workflows/.github/workflows/create-cop-pr.yml@py_test
-    with:
-      runner_type: ${{ inputs.runner_type }}
-      app_id: GH_RELEASE_APP_ID
-      app_private_key: GH_RELEASE_APP_PRIVATE_KEY
-      pr_title: "fix: AI Auto-Fixes für `${{ needs.prep_cop_pr.outputs.feature_branch }}`"
-      pr_body: |
-        ## 🤖 AI Auto-Fix PR
-
-        Automatische Code-Korrekturen für Branch `${{ needs.prep_cop_pr.outputs.feature_branch }}`.
-        Alle Checks bestanden auf `${{ github.ref_name }}`.
-
-        **Bitte Review durchführen und bei Zufriedenheit mergen.**
-
-        ---
-        _Erstellt durch die AI Autofix CI-Pipeline (Claude Code)._
-      pr_ready_comment: |
-        ✅ **Alle Checks bestanden** auf `${{ github.ref_name }}`.
-
-        Dieser PR ist bereit zum Review und Merge.
-    secrets:
-      GH_RELEASE_APP_ID: ${{ secrets.GH_RELEASE_APP_ID }}
-      GH_RELEASE_APP_PRIVATE_KEY: ${{ secrets.GH_RELEASE_APP_PRIVATE_KEY }}
-
   # ── Summary gate ────────────────────────────────────────────────────
   py_module_checks_summary:
     needs:
       - python_base
       - python_tests
       - python_ai_autofix
-      - create_cop_pr
     runs-on: ${{ inputs.runner_type }}
     if: always()
     outputs:
@@ -255,7 +202,6 @@ jobs:
           echo "| 🐍 Quality (Black/isort/Flake8/Bandit) | ${{ needs.python_base.outputs.all_steps_passed == 'true' && '✅' || needs.python_base.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 🧪 Tests | ${{ needs.python_tests.outputs.all_tests_passed == 'true' && '✅' || needs.python_tests.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 🤖 AI Autofix | ${{ needs.python_ai_autofix.outputs.fixes_applied == 'true' && '✅ Applied' || needs.python_ai_autofix.result == 'skipped' && '⏭️' || '—' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📋 _cop PR | ${{ needs.create_cop_pr.result == 'success' && '✅' || needs.create_cop_pr.result == 'skipped' && '⏭️' || '—' }} |" >> $GITHUB_STEP_SUMMARY
 
       - name: Gate
         id: status

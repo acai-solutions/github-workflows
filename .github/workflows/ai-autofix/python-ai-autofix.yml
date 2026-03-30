@@ -94,6 +94,21 @@ on:
         default: "41898282+github-actions[bot]@users.noreply.github.com"
         required: false
         type: string
+      fix_python:
+        description: "Whether to run Python fixes (flake8, bandit, tests)"
+        required: false
+        default: true
+        type: boolean
+      fix_terraform:
+        description: "Whether to run terraform fmt fixes"
+        required: false
+        default: false
+        type: boolean
+      tf_version:
+        description: "Terraform version to use when fix_terraform is true"
+        required: false
+        default: "latest"
+        type: string
 
     secrets:
       GH_RELEASE_APP_ID:
@@ -119,10 +134,6 @@ on:
       iteration:
         description: "Current iteration count after this run"
         value: ${{ jobs.guard.outputs.iteration }}
-      pr_url:
-        description: "URL of the pull request from _cop to feature branch"
-        value: ${{ jobs.autofix.outputs.pr_url }}
-
 defaults:
   run:
     shell: bash
@@ -199,7 +210,7 @@ jobs:
     outputs:
       fixes_applied: ${{ steps.set_outputs.outputs.fixes_applied }}
       fix_summary: ${{ steps.set_outputs.outputs.fix_summary }}
-      pr_url: ${{ steps.create_pr.outputs.pr_url }}
+      next_iteration: ${{ steps.set_outputs.outputs.next_iteration }}
 
     steps:
       # ── Auth + Checkout ─────────────────────────────────────────────────
@@ -588,6 +599,10 @@ jobs:
           B="${{ steps.commit_bandit.outputs.committed }}"
           T="${{ steps.commit_tests.outputs.committed }}"
 
+          ITER="${{ needs.guard.outputs.iteration }}"
+          NEXT=$((ITER + 1))
+          echo "next_iteration=${NEXT}" >> "$GITHUB_OUTPUT"
+
           if [[ "${F}" == "true" || "${B}" == "true" || "${T}" == "true" ]]; then
             echo "fixes_applied=true" >> "$GITHUB_OUTPUT"
             PARTS=()
@@ -618,86 +633,6 @@ jobs:
           git push origin "${TAG}"
           echo "✅ Pushed ${COP} — tagged ${TAG}"
 
-      - name: Create or update PR
-        id: create_pr
-        if: steps.set_outputs.outputs.fixes_applied == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          COP="${{ needs.guard.outputs.cop_branch }}"
-          FEATURE="${{ needs.guard.outputs.feature_branch }}"
-          ITER="${{ needs.guard.outputs.iteration }}"
-          NEXT=$((ITER + 1))
-
-          EXISTING=$(gh pr list --head "${COP}" --base "${FEATURE}" \
-            --json url -q '.[0].url' 2>/dev/null || echo "")
-
-          if [[ -n "${EXISTING}" ]]; then
-            echo "📎 PR already exists: ${EXISTING}"
-            echo "pr_url=${EXISTING}" >> "$GITHUB_OUTPUT"
-          else
-            # Build per-tool rows: "findings before → status"
-            if [[ "${{ inputs.copilot_fix_flake8 }}" == "true" ]]; then
-              BEFORE="${{ steps.run_flake8.outputs.count }}"
-              if [[ "${{ steps.commit_flake8.outputs.committed }}" == "true" ]]; then
-                FLAKE8_ROW="| Flake8 | ${BEFORE} findings | ✅ Fixes committed |"
-              elif [[ "${{ steps.claude_flake8.outcome }}" == "failure" ]]; then
-                FLAKE8_ROW="| Flake8 | ${BEFORE} findings | ⚠️ Session incomplete |"
-              else
-                FLAKE8_ROW="| Flake8 | 0 findings | ⏭️ Already clean |"
-              fi
-            else
-              FLAKE8_ROW="| Flake8 | — | ⏭️ Skipped |"
-            fi
-
-            if [[ "${{ inputs.copilot_fix_bandit }}" == "true" ]]; then
-              BEFORE="${{ steps.run_bandit.outputs.count }}"
-              if [[ "${{ steps.commit_bandit.outputs.committed }}" == "true" ]]; then
-                BANDIT_ROW="| Bandit | ${BEFORE} findings | ✅ Fixes committed |"
-              elif [[ "${{ steps.claude_bandit.outcome }}" == "failure" ]]; then
-                BANDIT_ROW="| Bandit | ${BEFORE} findings | ⚠️ Session incomplete |"
-              else
-                BANDIT_ROW="| Bandit | 0 findings | ⏭️ Already clean |"
-              fi
-            else
-              BANDIT_ROW="| Bandit | — | ⏭️ Skipped |"
-            fi
-
-            if [[ "${{ inputs.copilot_fix_tests }}" == "true" ]]; then
-              BEFORE="${{ steps.run_pytest.outputs.count }}"
-              if [[ "${{ steps.commit_tests.outputs.committed }}" == "true" ]]; then
-                TESTS_ROW="| Tests | ${BEFORE} failures | ✅ Fixes committed |"
-              elif [[ "${{ steps.claude_tests.outcome }}" == "failure" ]]; then
-                TESTS_ROW="| Tests | ${BEFORE} failures | ⚠️ Session incomplete |"
-              else
-                TESTS_ROW="| Tests | 0 failures | ⏭️ All passing |"
-              fi
-            else
-              TESTS_ROW="| Tests | — | ⏭️ Skipped |"
-            fi
-
-            PR_URL=$(gh pr create \
-              --head "${COP}" \
-              --base "${FEATURE}" \
-              --title "fix: Python autofix for \`${FEATURE}\` (iteration ${NEXT})" \
-              --body "## 🤖 Python AI Autofix (Claude Code)
-
-          Automated fixes applied by Claude Code on \`${COP}\` → \`${FEATURE}\`.
-
-          | | Findings | Result |
-          |---|---|---|
-          | _cop branch | \`${COP}\` | |
-          | Iteration | ${NEXT} / ${{ inputs.max_copilot_attempts }} | |
-          ${FLAKE8_ROW}
-          ${BANDIT_ROW}
-          ${TESTS_ROW}
-
-          > Review and merge when CI passes on this branch.")
-
-            echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
-            echo "✅ Created PR: ${PR_URL}"
-          fi
-
       # ── Summary ─────────────────────────────────────────────────────────
       - name: Summary
         if: always()
@@ -713,4 +648,27 @@ jobs:
           echo "| Bandit | ${{ inputs.copilot_fix_bandit && '✅' || '⏭️' }} — committed: ${{ steps.commit_bandit.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Tests  | ${{ inputs.copilot_fix_tests && '✅' || '⏭️' }} — committed: ${{ steps.commit_tests.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Fixes applied | ${{ steps.set_outputs.outputs.fixes_applied || 'false' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| PR | ${{ steps.create_pr.outputs.pr_url || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ── Create PR: _cop → feature ──────────────────────────────────────────
+  create_cop_pr:
+    needs: [guard, autofix]
+    if: needs.autofix.outputs.fixes_applied == 'true'
+    uses: ./.github/workflows/ai-autofix/create-cop-pr.yml
+    with:
+      runner_type: ${{ inputs.runner_type }}
+      app_id: GH_RELEASE_APP_ID
+      app_private_key: GH_RELEASE_APP_PRIVATE_KEY
+      pr_title: "fix: Python autofix für `${{ needs.guard.outputs.feature_branch }}` (iteration ${{ needs.autofix.outputs.next_iteration }})"
+      pr_body: |
+        ## 🤖 Python AI Autofix (Claude Code)
+
+        Automated fixes applied by Claude Code on `${{ needs.guard.outputs.cop_branch }}` → `${{ needs.guard.outputs.feature_branch }}`.
+
+        **Fix summary:** ${{ needs.autofix.outputs.fix_summary }}
+
+        > Review and merge when CI passes on this branch.
+      pr_ready_comment: |
+        ✅ **All checks passed** on `${{ needs.guard.outputs.cop_branch }}`.
+
+        This PR is ready for review and merge.
+    secrets: inherit
