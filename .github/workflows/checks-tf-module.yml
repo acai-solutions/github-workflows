@@ -37,23 +37,7 @@ on:
         type: string
 
       # Linting inputs
-      linting_include:
-        description: Whether to include TFLint code quality checks
-        required: false
-        default: true
-        type: boolean
-      linting_allow_failures:
-        description: Whether to allow linting failures to pass the pipeline
-        required: false
-        default: false
-        type: boolean
 
-      # Python inputs
-      python_version:
-        description: Python version
-        default: "3.11"
-        required: false
-        type: string
 
       # Terraform inputs
       tf_version:
@@ -66,6 +50,11 @@ on:
         required: false
         default: false
         type: boolean
+      tf_lint_include:
+        description: Whether to include TFLint code quality checks
+        required: false
+        default: true
+        type: boolean
       tf_lint_config_path:
         description: Path to tflint config in gh_wf_config_repo (e.g. "aws/.tflint.hcl")
         default: .tflint.hcl
@@ -76,6 +65,11 @@ on:
         default: latest
         required: false
         type: string
+      tf_lint_allow_failures:
+        description: Whether to allow TFLint failures to pass the pipeline
+        required: false
+        default: false
+        type: boolean
       tf_trivy_version:
         description: Trivy version to use
         default: latest
@@ -192,12 +186,12 @@ jobs:
       runner_type: ${{ inputs.runner_type }}
       gh_wf_config_repo: ${{ inputs.gh_wf_config_repo }}
       gh_wf_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
-      linting_include: ${{ inputs.linting_include }}
-      linting_allow_failures: ${{ inputs.linting_allow_failures }}
+      tf_lint_include: ${{ inputs.tf_lint_include }}
       tf_lint_config_path: ${{ inputs.tf_lint_config_path }}
       tf_lint_version: ${{ inputs.tf_lint_version }}
-      trivy_version: ${{ inputs.tf_trivy_version }}
-      checkov_failures_allow: ${{ inputs.tf_checkov_failures_allow }}
+      tf_lint_allow_failures: ${{ inputs.tf_lint_allow_failures }}
+      tf_trivy_version: ${{ inputs.tf_trivy_version }}
+      tf_checkov_failures_allow: ${{ inputs.tf_checkov_failures_allow }}
 
   # ── Terratest ───────────────────────────────────────────────────────
   terraform_module_test:

@@ -25,17 +25,11 @@ on:
         required: false
         type: string
 
-      linting_include:
-        description: "Whether to include Python or TFLint code quality checks"
+      tf_lint_include:
+        description: Whether to include TFLint code quality checks
         required: false
         default: true
         type: boolean
-      linting_allow_failures:
-        description: "Whether to allow Python linting failures to pass the pipeline"
-        required: false
-        default: false
-        type: boolean
-
       tf_lint_config_path:
         description: 'Path to tflint config in gh_wf_config_repo (e.g. "aws/.tflint.hcl")'
         default: ".tflint.hcl"
@@ -46,12 +40,17 @@ on:
         default: "latest"
         required: false
         type: string
-      trivy_version:
+      tf_lint_allow_failures:
+        description: "Whether to allow Python linting failures to pass the pipeline"
+        required: false
+        default: false
+        type: boolean
+      tf_trivy_version:
         description: "Trivy version to use"
         default: "latest"
         required: false
         type: string
-      checkov_failures_allow:
+      tf_checkov_failures_allow:
         description: "Whether to abort the workflow if Checkov checks fail"
         required: false
         default: false
@@ -83,13 +82,13 @@ jobs:
           fetch-depth: 0
 
       - name: Set up TFLint
-        if: ${{ inputs.linting_include }}
+        if: ${{ inputs.tf_lint_include }}
         uses: terraform-linters/setup-tflint@v5
         with:
           tflint_version: ${{ inputs.tf_lint_version }}
 
       - name: Get TFLint Config
-        if: ${{ inputs.linting_include }}
+        if: ${{ inputs.tf_lint_include }}
         run: |
           echo "Fetching TFLint config from: ${{ inputs.gh_wf_config_repo }}/${{ inputs.tf_lint_config_path }}@${{ inputs.gh_wf_config_repo_ref }}"
           
@@ -140,7 +139,7 @@ jobs:
           fi
 
       - name: Initialize TFLint
-        if: ${{ inputs.linting_include }}
+        if: ${{ inputs.tf_lint_include }}
         run: |
           echo "Initializing TFLint with config:"
           cat .tflint.hcl
@@ -148,21 +147,21 @@ jobs:
           tflint --init
 
       - name: Run TFLint (Code Quality)
-        if: ${{ inputs.linting_include }}
+        if: ${{ inputs.tf_lint_include }}
         id: tflint
-        continue-on-error: ${{ inputs.linting_allow_failures }}
+        continue-on-error: ${{ inputs.tf_lint_allow_failures }}
         run: |
           # Run TFLint and capture the exit code
           tflint --format compact --minimum-failure-severity=error || TFLINT_EXIT_CODE=$?
           
           # Check if we should fail on linting issues
-          if [[ "${{ inputs.linting_allow_failures }}" == "false" ]] && [[ "${TFLINT_EXIT_CODE:-0}" -ne 0 ]]; then
-            echo "❌ TFLint found issues and linting_allow_failures is false"
+          if [[ "${{ inputs.tf_lint_allow_failures }}" == "false" ]] && [[ "${TFLINT_EXIT_CODE:-0}" -ne 0 ]]; then
+            echo "❌ TFLint found issues and tf_lint_allow_failures is false"
             exit ${TFLINT_EXIT_CODE}
           else
             echo "✅ TFLint completed (exit code: ${TFLINT_EXIT_CODE:-0})"
             if [[ "${TFLINT_EXIT_CODE:-0}" -ne 0 ]]; then
-              echo "⚠️ Issues found but continuing as linting_allow_failures is true"
+              echo "⚠️ Issues found but continuing as tf_lint_allow_failures is true"
             fi
             exit 0
           fi
@@ -183,12 +182,12 @@ jobs:
           trivy_flags: "--severity CRITICAL,HIGH --timeout 10m --skip-dirs examples,.terraform"
           trivy_command: config
           trivy_target: .
-          trivy_version: ${{ inputs.trivy_version }}
+          trivy_version: ${{ inputs.tf_trivy_version }}
 
       - name: Install Trivy
         uses: aquasecurity/setup-trivy@e07451d2e059ed86c2870430ea286b3a9e0bf241
         with:
-          version: ${{ inputs.trivy_version }}
+          version: ${{ inputs.tf_trivy_version }}
 
       # https://github.com/marketplace/actions/aqua-security-trivy
       - name: Run Trivy Security Scan (SARIF)
@@ -215,7 +214,7 @@ jobs:
 
       - name: Run Checkov Security Scan
         id: checkov
-        continue-on-error: ${{ inputs.checkov_failures_allow }}
+        continue-on-error: ${{ inputs.tf_checkov_failures_allow }}
         uses: bridgecrewio/checkov-action@v12    
         env:
           # Force Checkov to treat the current branch as both FROM and TO to avoid "main" annotations
@@ -228,7 +227,7 @@ jobs:
           output_format: cli,junitxml
           output_file_path: console,checkov-report.xml
           quiet: true
-          soft_fail: ${{ inputs.checkov_failures_allow }}
+          soft_fail: ${{ inputs.tf_checkov_failures_allow }}
 
       - name: Publish Checkov Test Results
         uses: mikepenz/action-junit-report@v5
@@ -257,7 +256,7 @@ jobs:
           TRIVY_RESULT="${{ steps.trivy_reviewdog.outcome || steps.trivy_scan.outcome }}"
           CHECKOV_RESULT="${{ steps.checkov.outcome }}"
 
-          if [[ "${{ inputs.linting_include }}" == "true" && "$TFLINT_RESULT" != "success" ]]; then
+          if [[ "${{ inputs.tf_lint_include }}" == "true" && "$TFLINT_RESULT" != "success" ]]; then
             echo "all_passed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -265,7 +264,7 @@ jobs:
             echo "all_passed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [[ "${{ inputs.checkov_failures_allow }}" == "false" && "$CHECKOV_RESULT" != "success" ]]; then
+          if [[ "${{ inputs.tf_checkov_failures_allow }}" == "false" && "$CHECKOV_RESULT" != "success" ]]; then
             echo "all_passed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -284,12 +283,12 @@ jobs:
           echo '| Check | Status | Result |' >> $GITHUB_STEP_SUMMARY
           echo '|-------|--------|--------|' >> $GITHUB_STEP_SUMMARY
           
-          if [[ "${{ inputs.linting_include }}" == "true" ]]; then
+          if [[ "${{ inputs.tf_lint_include }}" == "true" ]]; then
             echo "| 🔍 TFLint (Code Quality) | ${{ needs.tf_security_checks.outputs.tflint_status }} | ${{ needs.tf_security_checks.outputs.tflint_status == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "| 🛡️ Trivy (Security) | ${{ needs.tf_security_checks.outputs.trivy_status }} | ${{ needs.tf_security_checks.outputs.trivy_status == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ Checkov (Compliance) | ${{ needs.tf_security_checks.outputs.checkov_status }} | ${{ needs.tf_security_checks.outputs.checkov_status == 'success' && '✅ Passed' || (inputs.checkov_failures_allow && '⚠️ Failed (Allowed)' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Checkov (Compliance) | ${{ needs.tf_security_checks.outputs.checkov_status }} | ${{ needs.tf_security_checks.outputs.checkov_status == 'success' && '✅ Passed' || (inputs.tf_checkov_failures_allow && '⚠️ Failed (Allowed)' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           
           if [[ "${{ needs.tf_security_checks.outputs.all_checks_passed }}" == "true" ]]; then
