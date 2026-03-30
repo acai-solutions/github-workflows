@@ -90,7 +90,7 @@ on:
         default: false
         type: boolean
       py_ai_autofix_max_attempts:
-        description: "Maximum number of Python autofix iterations on _cop branch"
+        description: "Maximum number of Python autofix iterations on _ai branch"
         required: false
         default: 3
         type: number
@@ -104,13 +104,13 @@ on:
 
     outputs:
       fixes_applied:
-        description: "Whether fixes were pushed to _cop branch"
+        description: "Whether fixes were pushed to _ai branch"
         value: ${{ jobs.autofix.outputs.fixes_applied }}
       fix_summary:
         description: "Summary of applied fixes"
         value: ${{ jobs.autofix.outputs.fix_summary }}
       ai_branch:
-        description: "Name of the _cop branch"
+        description: "Name of the _ai branch"
         value: ${{ jobs.guard.outputs.ai_branch }}
       feature_branch:
         description: "Name of the feature branch"
@@ -625,7 +625,7 @@ jobs:
           echo '' >> $GITHUB_STEP_SUMMARY
           echo "| | |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| _cop branch | \`${{ needs.guard.outputs.ai_branch }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| _ai branch | \`${{ needs.guard.outputs.ai_branch }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Feature branch | \`${{ needs.guard.outputs.feature_branch }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Iteration | ${{ needs.guard.outputs.iteration }} / ${{ inputs.py_ai_autofix_max_attempts }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Flake8 | ${{ inputs.py_ai_autofix_flake8 && '✅' || '⏭️' }} — committed: ${{ steps.commit_flake8.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY

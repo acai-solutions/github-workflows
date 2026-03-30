@@ -1,23 +1,25 @@
 name: Terraform AI Autofix (Claude Code)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Reusable workflow: Auto-fixes Terraform findings on a dedicated _cop branch.
+# Reusable workflow: Auto-fixes Terraform findings on a dedicated _ai branch.
 #
 # Fix pipeline (sequential, each tool gets its own Claude session):
 #   1. terraform fmt   — deterministic, no AI needed
 #   2. TFLint          — Claude Code fixes code-quality findings
 #   3. Trivy           — Claude Code fixes security findings
 #   4. Checkov         — Claude Code fixes compliance findings
+#   5. Terratest       — Claude Code fixes Go test / Terraform example failures
 #
-# Branch Strategy (_cop):
-#   feature branch fails → _cop created → fixes applied → push triggers CI
-#   _cop fails again     → next iteration → more fixes → CI re-runs
-#   _cop passes          → caller creates PR (_cop → feature)
+# Branch Strategy (_ai):
+#   feature branch fails → _ai created → fixes applied → push triggers CI
+#   _ai fails again     → next iteration → more fixes → CI re-runs
+#   _ai passes          → caller creates PR (_ai → feature)
 #   max iterations hit   → stops (no infinite loop)
 #
 # Prerequisites:
 #   - GH_RELEASE_APP_ID + GH_RELEASE_APP_PRIVATE_KEY secrets
 #   - ANTHROPIC_API_KEY secret (for Claude Code sessions)
+#   - AWS_TESTBED_OIDC_ROLE_ARN secret (only when tf_ai_autofix_tests is enabled)
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -73,8 +75,23 @@ on:
         required: false
         default: true
         type: boolean
+      tf_ai_autofix_tests:
+        description: "Whether to fix Terratest failures (Go test + Terraform examples)"
+        required: false
+        default: false
+        type: boolean
+      tf_terratest_path:
+        description: "Path to terratest directory"
+        default: "test/terratest"
+        required: false
+        type: string
+      tf_terratest_examples_path:
+        description: "Path to terratest examples directory"
+        default: "examples"
+        required: false
+        type: string
       tf_ai_autofix_max_attempts:
-        description: "Maximum number of Terraform autofix iterations on _cop branch"
+        description: "Maximum number of Terraform autofix iterations on _ai branch"
         required: false
         default: 3
         type: number
@@ -96,16 +113,22 @@ on:
         required: true
       ANTHROPIC_API_KEY:
         required: false
+      GH_REPO_READ_APP_ID:
+        required: false
+      GH_REPO_READ_APP_PRIVATE_KEY:
+        required: false
+      AWS_TESTBED_OIDC_ROLE_ARN:
+        required: false
 
     outputs:
       fixes_applied:
-        description: "Whether fixes were pushed to _cop branch"
+        description: "Whether fixes were pushed to _ai branch"
         value: ${{ jobs.autofix.outputs.fixes_applied }}
       fix_summary:
         description: "Summary of applied fixes"
         value: ${{ jobs.autofix.outputs.fix_summary }}
       ai_branch:
-        description: "Name of the _cop branch"
+        description: "Name of the _ai branch"
         value: ${{ jobs.guard.outputs.ai_branch }}
       feature_branch:
         description: "Name of the feature branch"
@@ -124,7 +147,7 @@ jobs:
     runs-on: ${{ inputs.runner_type }}
     outputs:
       should_run: ${{ steps.detect.outputs.should_run }}
-      is_cop_branch: ${{ steps.detect.outputs.is_cop_branch }}
+      is_ai_branch: ${{ steps.detect.outputs.is_ai_branch }}
       current_branch: ${{ steps.detect.outputs.current_branch }}
       ai_branch: ${{ steps.detect.outputs.ai_branch }}
       feature_branch: ${{ steps.detect.outputs.feature_branch }}
@@ -141,24 +164,24 @@ jobs:
         run: |
           BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
 
-          if [[ "${BRANCH}" == *_cop ]]; then
-            IS_COP=true
-            FEATURE="${BRANCH%_cop}"
+          if [[ "${BRANCH}" == *_ai ]]; then
+            IS_ai=true
+            FEATURE="${BRANCH%_ai}"
             COP="${BRANCH}"
           else
-            IS_COP=false
+            IS_ai=false
             FEATURE="${BRANCH}"
-            COP="${BRANCH}_cop"
+            COP="${BRANCH}_ai"
           fi
 
           echo "current_branch=${BRANCH}"    >> "$GITHUB_OUTPUT"
-          echo "is_cop_branch=${IS_COP}"     >> "$GITHUB_OUTPUT"
+          echo "is_ai_branch=${IS_ai}"     >> "$GITHUB_OUTPUT"
           echo "feature_branch=${FEATURE}"   >> "$GITHUB_OUTPUT"
           echo "ai_branch=${COP}"            >> "$GITHUB_OUTPUT"
 
           # Derive iteration count from scoped git tags (autofix/<cop>-iter-N)
           ITERATION=0
-          if [[ "${IS_COP}" == "true" ]]; then
+          if [[ "${IS_ai}" == "true" ]]; then
             git fetch origin --tags 2>/dev/null || true
             TAG_PREFIX="autofix/$(echo "${COP}" | tr '/' '-')-iter-"
             LATEST=$(git tag -l "${TAG_PREFIX}*" --sort=version:refname | tail -1)
@@ -177,7 +200,7 @@ jobs:
           fi
 
           echo "📌 Branch: ${BRANCH} | Feature: ${FEATURE} | COP: ${COP}"
-          echo "📌 Is _cop: ${IS_COP} | Iteration: ${ITERATION}/${MAX}"
+          echo "📌 Is _ai: ${IS_ai} | Iteration: ${ITERATION}/${MAX}"
 
   # ── Main autofix job ────────────────────────────────────────────────────
   autofix:
@@ -186,6 +209,8 @@ jobs:
     runs-on: ${{ inputs.runner_type }}
     permissions:
       pull-requests: write
+      id-token: write
+      contents: read
     outputs:
       fixes_applied: ${{ steps.set_outputs.outputs.fixes_applied }}
       fix_summary: ${{ steps.set_outputs.outputs.fix_summary }}
@@ -208,22 +233,22 @@ jobs:
           fetch-depth: 0
 
       # ── Branch setup ────────────────────────────────────────────────────
-      - name: Setup _cop branch
+      - name: Setup _ai branch
         run: |
           git config --local user.name  "${{ inputs.commit_user }}"
           git config --local user.email "${{ inputs.commit_email }}"
 
-          if [[ "${{ needs.guard.outputs.is_cop_branch }}" == "true" ]]; then
-            echo "🔄 Already on _cop branch"
+          if [[ "${{ needs.guard.outputs.is_ai_branch }}" == "true" ]]; then
+            echo "🔄 Already on _ai branch"
           else
             COP="${{ needs.guard.outputs.ai_branch }}"
             git fetch origin
             if git ls-remote --exit-code --heads origin "${COP}" >/dev/null 2>&1; then
               git checkout -b "${COP}" "origin/${COP}"
-              echo "🔄 Checked out existing _cop branch"
+              echo "🔄 Checked out existing _ai branch"
             else
               git checkout -b "${COP}"
-              echo "🆕 Created _cop branch: ${COP}"
+              echo "🆕 Created _ai branch: ${COP}"
             fi
           fi
           echo "✅ Branch: $(git branch --show-current)"
@@ -582,6 +607,141 @@ jobs:
           echo "📝 Committed Checkov fixes: ${COUNT} files"
 
       # ══════════════════════════════════════════════════════════════════════
+      # TERRATEST
+      # ══════════════════════════════════════════════════════════════════════
+
+      - name: Setup Go
+        if: inputs.tf_ai_autofix_tests
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24'
+
+      - name: Configure Git for module access
+        if: inputs.tf_ai_autofix_tests
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app_token.outputs.token }}@github.com/".insteadOf https://github.com/
+
+      - name: Configure AWS Credentials via OIDC
+        if: inputs.tf_ai_autofix_tests
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_TESTBED_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_TESTBED_AWS_REGION }}
+
+      - name: Prepare Terratest environment
+        if: inputs.tf_ai_autofix_tests
+        run: |
+          # Write testbed tfvars if available
+          if [[ -n "${{ vars.AWS_TESTBED_TFVARS }}" ]]; then
+            echo "${{ vars.AWS_TESTBED_TFVARS }}" > ${{ inputs.tf_terratest_path }}/testbed.tfvar
+            echo "✅ Testbed tfvars written"
+          fi
+
+          # Write backend config if available
+          if [[ -n "${{ vars.AWS_TESTBED_BACKEND_JSON }}" ]]; then
+            echo "${{ vars.AWS_TESTBED_BACKEND_JSON }}" > ${{ inputs.tf_terratest_path }}/backend.json
+            echo "✅ Backend config written"
+          fi
+
+          # Ensure Go dependencies are ready
+          cd ${{ inputs.tf_terratest_path }}
+          go mod init test/terratest 2>/dev/null || true
+          go get github.com/gruntwork-io/terratest/modules/terraform@v0.40.8
+          go get github.com/stretchr/testify/assert@latest
+          go mod tidy
+
+      - name: Run Terratest
+        if: inputs.tf_ai_autofix_tests
+        id: run_terratest
+        run: |
+          cd ${{ inputs.tf_terratest_path }}
+          go test -v -timeout 60m > /tmp/terratest-output.txt 2>&1 || true
+
+          if grep -qE "^FAIL" /tmp/terratest-output.txt; then
+            COUNT=$(grep -cE "--- FAIL" /tmp/terratest-output.txt || echo "0")
+            echo "⚠️ ${COUNT} Terratest failures"
+            echo "has_failures=true" >> "$GITHUB_OUTPUT"
+            echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ All Terratest tests pass"
+            echo "has_failures=false" >> "$GITHUB_OUTPUT"
+            echo "count=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "🤖 Claude: Fix Terratest failures"
+        id: claude_terratest
+        if: inputs.tf_ai_autofix_tests && steps.run_terratest.outputs.has_failures == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            Fix the Terratest failures listed in /tmp/terratest-output.txt.
+
+            Test directory: ${{ inputs.tf_terratest_path }}
+            Examples directory: ${{ inputs.tf_terratest_examples_path }}
+
+            Steps:
+            1. Read /tmp/terratest-output.txt to identify every failure and its root cause.
+            2. Inspect the Go test files in ${{ inputs.tf_terratest_path }}/ and the
+               Terraform example configs in ${{ inputs.tf_terratest_examples_path }}/.
+            3. Fix the root cause — this may be:
+               - Terraform code issues in examples/ (.tf files)
+               - Go test code issues in test/terratest/ (_test.go files)
+               - Missing or incorrect variable/output definitions
+               - Resource configuration errors
+            4. Re-run: cd ${{ inputs.tf_terratest_path }} && go test -v -timeout 60m
+            5. Iterate until all tests pass.
+
+            Common fixes:
+            - "Error: Reference to undeclared ..." → add missing variable/local/data block
+            - "Error: Unsupported argument" → remove or rename incorrect arguments
+            - "Error: Missing required argument" → add the required argument
+            - Test assertion failures → fix the Terraform config so outputs match expectations
+            - Provider errors → fix provider configuration in examples
+
+            Rules:
+            - Edit .tf files in ${{ inputs.tf_terratest_examples_path }}/ and .go files in ${{ inputs.tf_terratest_path }}/.
+            - Do NOT modify go.mod, go.sum, or any lock files.
+            - Do NOT add comments explaining your changes.
+            - Do NOT commit anything — just edit files.
+            - Do NOT weaken or remove test assertions.
+            - Preserve existing code structure and formatting.
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app_token.outputs.token }}
+          claude_args: >
+            --max-turns 25
+            --model claude-sonnet-4-6
+            --allowedTools Edit,MultiEdit,Write,Read,Glob,Grep,LS,Bash
+          track_progress: false
+          show_full_output: true
+
+      - name: "⚠️ Warn: Terratest Claude session incomplete"
+        if: always() && inputs.tf_ai_autofix_tests && steps.run_terratest.outputs.has_failures == 'true' && steps.claude_terratest.outcome == 'failure'
+        run: |
+          echo "::warning::Claude Terratest session did not complete (max-turns or API error) — partial fixes may have been applied"
+          echo "⚠️ **Claude Terratest session incomplete** — hit max-turns or API error. Partial fixes may have been committed." >> $GITHUB_STEP_SUMMARY
+
+      - name: Commit Terratest fixes
+        id: commit_terratest
+        if: inputs.tf_ai_autofix_tests
+        run: |
+          if [[ -z "$(git status -s)" ]]; then
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ No Terratest changes to commit"
+            exit 0
+          fi
+
+          COUNT=$(git status -s | wc -l | tr -d ' ')
+          ITER="${{ needs.guard.outputs.iteration }}"
+          NEXT=$((ITER + 1))
+          git add -A
+          git commit -m "fix(terratest): Claude Code autofix (${COUNT} files, iteration ${NEXT})
+
+          copilot-autofix: true"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+          echo "📝 Committed Terratest fixes: ${COUNT} files"
+
+      # ══════════════════════════════════════════════════════════════════════
       # PUSH + SUMMARY
       # ══════════════════════════════════════════════════════════════════════
 
@@ -592,18 +752,20 @@ jobs:
           LINT="${{ steps.commit_tflint.outputs.committed }}"
           TRIVY="${{ steps.commit_trivy.outputs.committed }}"
           CHECKOV="${{ steps.commit_checkov.outputs.committed }}"
+          TESTS="${{ steps.commit_terratest.outputs.committed }}"
 
           ITER="${{ needs.guard.outputs.iteration }}"
           NEXT=$((ITER + 1))
           echo "next_iteration=${NEXT}" >> "$GITHUB_OUTPUT"
 
-          if [[ "${FMT}" == "true" || "${LINT}" == "true" || "${TRIVY}" == "true" || "${CHECKOV}" == "true" ]]; then
+          if [[ "${FMT}" == "true" || "${LINT}" == "true" || "${TRIVY}" == "true" || "${CHECKOV}" == "true" || "${TESTS}" == "true" ]]; then
             echo "fixes_applied=true" >> "$GITHUB_OUTPUT"
             PARTS=()
             [[ "${FMT}" == "true" ]]     && PARTS+=("fmt")
             [[ "${LINT}" == "true" ]]    && PARTS+=("tflint")
             [[ "${TRIVY}" == "true" ]]   && PARTS+=("trivy")
             [[ "${CHECKOV}" == "true" ]] && PARTS+=("checkov")
+            [[ "${TESTS}" == "true" ]]   && PARTS+=("terratest")
             printf -v SUMMARY '%s,' "${PARTS[@]}"
             echo "fix_summary=${SUMMARY%,}" >> "$GITHUB_OUTPUT"
           else
@@ -611,7 +773,7 @@ jobs:
             echo "fix_summary=No fixes needed" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Push _cop branch
+      - name: Push _ai branch
         if: steps.set_outputs.outputs.fixes_applied == 'true'
         env:
           GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -636,16 +798,17 @@ jobs:
           echo '' >> $GITHUB_STEP_SUMMARY
           echo "| | |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| _cop branch | \`${{ needs.guard.outputs.ai_branch }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| _ai branch | \`${{ needs.guard.outputs.ai_branch }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Feature branch | \`${{ needs.guard.outputs.feature_branch }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Iteration | ${{ needs.guard.outputs.iteration }} / ${{ inputs.tf_ai_autofix_max_attempts }} |" >> $GITHUB_STEP_SUMMARY
           echo "| terraform fmt | ${{ steps.commit_fmt.outputs.committed == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| TFLint | ${{ inputs.tf_ai_autofix_tflint && '✅' || '⏭️' }} — committed: ${{ steps.commit_tflint.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Trivy | ${{ inputs.tf_ai_autofix_trivy && '✅' || '⏭️' }} — committed: ${{ steps.commit_trivy.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Checkov | ${{ inputs.tf_ai_autofix_checkov && '✅' || '⏭️' }} — committed: ${{ steps.commit_checkov.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Terratest | ${{ inputs.tf_ai_autofix_tests && '✅' || '⏭️' }} — committed: ${{ steps.commit_terratest.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Fixes applied | ${{ steps.set_outputs.outputs.fixes_applied || 'false' }} |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Create PR: _cop → feature ──────────────────────────────────────────
+  # ── Create PR: _ai → feature ──────────────────────────────────────────
   create_ai_pr:
     needs: [guard, autofix]
     if: needs.autofix.outputs.fixes_applied == 'true'
