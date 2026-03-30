@@ -329,7 +329,7 @@ jobs:
           TF_CLI_ARGS_apply: "-var-file=${{ github.workspace }}/${{ inputs.tf_terratest_path }}/testbed.tfvar"
           TF_CLI_ARGS_destroy: "-var-file=${{ github.workspace }}/${{ inputs.tf_terratest_path }}/testbed.tfvar"
         run: |
-          go test -v -timeout 60m 2>&1 | tee >(./terratest_log_parser_linux_amd64)
+          go test -v -timeout 60m 2>&1 | tee terratest-output.txt >(./terratest_log_parser_linux_amd64)
           test ${PIPESTATUS[0]} -eq 0
           echo "./out/summary.log"
         continue-on-error: true
@@ -377,6 +377,15 @@ jobs:
       - name: Terratest Outcome
         if: ${{ steps.terratest_summary.outcome == 'failure' || steps.terratest_summary.outputs.exitcode == '1' }}
         run: exit 1
+
+      - name: Upload Terratest output for autofix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autofix-terratest-${{ strategy.job-index }}
+          path: ${{ inputs.tf_terratest_path }}/terratest-output.txt
+          if-no-files-found: ignore
+          retention-days: 1
 
   consume_outputs:
     needs: [terratest_run]

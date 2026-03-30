@@ -151,8 +151,9 @@ jobs:
         id: tflint
         continue-on-error: ${{ inputs.tf_lint_allow_failures }}
         run: |
-          # Run TFLint and capture the exit code
-          tflint --format compact --minimum-failure-severity=error || TFLINT_EXIT_CODE=$?
+          # Run TFLint — capture output for autofix consumption
+          tflint --format compact --minimum-failure-severity=error > tflint-findings.txt 2>&1 || TFLINT_EXIT_CODE=$?
+          cat tflint-findings.txt
           
           # Check if we should fail on linting issues
           if [[ "${{ inputs.tf_lint_allow_failures }}" == "false" ]] && [[ "${TFLINT_EXIT_CODE:-0}" -ne 0 ]]; then
@@ -212,6 +213,13 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
 
+      - name: Capture Trivy findings for autofix
+        if: always()
+        run: |
+          trivy config . --severity CRITICAL,HIGH --timeout 10m \
+            --skip-dirs examples,.terraform > trivy-findings.txt 2>&1 || true
+          echo "📦 Trivy text findings captured for autofix"
+
       - name: Run Checkov Security Scan
         id: checkov
         continue-on-error: ${{ inputs.tf_checkov_failures_allow }}
@@ -225,9 +233,13 @@ jobs:
           directory: .
           framework: terraform
           output_format: cli,junitxml
-          output_file_path: console,checkov-report.xml
+          output_file_path: checkov-findings.txt,checkov-report.xml
           quiet: true
           soft_fail: ${{ inputs.tf_checkov_failures_allow }}
+
+      - name: Display Checkov findings
+        if: always()
+        run: cat checkov-findings.txt 2>/dev/null || echo "No Checkov findings file"
 
       - name: Publish Checkov Test Results
         uses: mikepenz/action-junit-report@v5
@@ -247,6 +259,18 @@ jobs:
           else
             echo "No Checkov report found."
           fi
+
+      - name: Upload findings for autofix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autofix-security-findings
+          path: |
+            tflint-findings.txt
+            trivy-findings.txt
+            checkov-findings.txt
+          if-no-files-found: ignore
+          retention-days: 1
 
       - name: Determine Overall Status
         id: determine_status

@@ -253,6 +253,25 @@ jobs:
           fi
           echo "✅ Branch: $(git branch --show-current)"
 
+      # ── Download findings from upstream check jobs ──────────────────────
+      - name: Download security findings
+        id: dl_security
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: autofix-security-findings
+          path: /tmp/autofix-findings
+
+      - name: Download Terratest findings
+        if: inputs.tf_ai_autofix_tests
+        id: dl_terratest
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: autofix-terratest-*
+          merge-multiple: true
+          path: /tmp/autofix-findings
+
       # ══════════════════════════════════════════════════════════════════════
       # TERRAFORM FMT (deterministic — no AI needed)
       # ══════════════════════════════════════════════════════════════════════
@@ -332,7 +351,14 @@ jobs:
         if: inputs.tf_ai_autofix_tflint
         id: run_tflint
         run: |
-          tflint --format compact --recursive > /tmp/tflint-findings.txt 2>&1 || true
+          # Use findings from upstream check job if available
+          if [[ -f "/tmp/autofix-findings/tflint-findings.txt" ]] && [[ -s "/tmp/autofix-findings/tflint-findings.txt" ]]; then
+            cp /tmp/autofix-findings/tflint-findings.txt /tmp/tflint-findings.txt
+            echo "📦 Using TFLint findings from upstream check job"
+          else
+            echo "ℹ️ No upstream artifact — running TFLint scan"
+            tflint --format compact --recursive > /tmp/tflint-findings.txt 2>&1 || true
+          fi
 
           if [[ -s /tmp/tflint-findings.txt ]] && grep -qE "(Error|Warning)" /tmp/tflint-findings.txt; then
             COUNT=$(grep -cE "(Error|Warning)" /tmp/tflint-findings.txt || echo "0")
@@ -423,8 +449,15 @@ jobs:
         if: inputs.tf_ai_autofix_trivy
         id: run_trivy
         run: |
-          trivy config . --severity HIGH,CRITICAL --timeout 10m \
-            --skip-dirs examples,.terraform > /tmp/trivy-findings.txt 2>&1 || true
+          # Use findings from upstream check job if available
+          if [[ -f "/tmp/autofix-findings/trivy-findings.txt" ]] && [[ -s "/tmp/autofix-findings/trivy-findings.txt" ]]; then
+            cp /tmp/autofix-findings/trivy-findings.txt /tmp/trivy-findings.txt
+            echo "📦 Using Trivy findings from upstream check job"
+          else
+            echo "ℹ️ No upstream artifact — running Trivy scan"
+            trivy config . --severity HIGH,CRITICAL --timeout 10m \
+              --skip-dirs examples,.terraform > /tmp/trivy-findings.txt 2>&1 || true
+          fi
 
           if [[ -s /tmp/trivy-findings.txt ]] && grep -qE "^(HIGH|CRITICAL|MEDIUM)" /tmp/trivy-findings.txt; then
             COUNT=$(grep -cE "^(HIGH|CRITICAL|MEDIUM)" /tmp/trivy-findings.txt || echo "0")
@@ -521,8 +554,15 @@ jobs:
         if: inputs.tf_ai_autofix_checkov
         id: run_checkov
         run: |
-          checkov -d . --framework terraform --compact --quiet \
-            > /tmp/checkov-findings.txt 2>&1 || true
+          # Use findings from upstream check job if available
+          if [[ -f "/tmp/autofix-findings/checkov-findings.txt" ]] && [[ -s "/tmp/autofix-findings/checkov-findings.txt" ]]; then
+            cp /tmp/autofix-findings/checkov-findings.txt /tmp/checkov-findings.txt
+            echo "📦 Using Checkov findings from upstream check job"
+          else
+            echo "ℹ️ No upstream artifact — running Checkov scan"
+            checkov -d . --framework terraform --compact --quiet \
+              > /tmp/checkov-findings.txt 2>&1 || true
+          fi
 
           if [[ -s /tmp/checkov-findings.txt ]] && grep -q "FAILED" /tmp/checkov-findings.txt; then
             COUNT=$(grep -c "FAILED for resource" /tmp/checkov-findings.txt || echo "0")
@@ -654,8 +694,15 @@ jobs:
         if: inputs.tf_ai_autofix_tests
         id: run_terratest
         run: |
-          cd ${{ inputs.tf_terratest_path }}
-          go test -v -timeout 60m > /tmp/terratest-output.txt 2>&1 || true
+          # Use findings from upstream check job if available
+          if [[ -f "/tmp/autofix-findings/terratest-output.txt" ]] && [[ -s "/tmp/autofix-findings/terratest-output.txt" ]]; then
+            cp /tmp/autofix-findings/terratest-output.txt /tmp/terratest-output.txt
+            echo "📦 Using Terratest output from upstream check job"
+          else
+            echo "ℹ️ No upstream artifact — running Terratest"
+            cd ${{ inputs.tf_terratest_path }}
+            go test -v -timeout 60m > /tmp/terratest-output.txt 2>&1 || true
+          fi
 
           if grep -qE "^FAIL" /tmp/terratest-output.txt; then
             COUNT=$(grep -cE "--- FAIL" /tmp/terratest-output.txt || echo "0")
@@ -811,7 +858,7 @@ jobs:
   # ── Create PR: _ai → feature ──────────────────────────────────────────
   create_ai_pr:
     needs: [guard, autofix]
-    if: needs.autofix.outputs.fixes_applied == 'true'
+    if: always() && needs.guard.outputs.should_run == 'true'
     uses: ./.github/workflows/ai-autofix-create-ai-pr.yml
     with:
       runner_type: ${{ inputs.runner_type }}

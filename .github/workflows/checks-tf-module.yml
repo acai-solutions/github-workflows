@@ -284,3 +284,34 @@ jobs:
             echo "::error::Some checks failed."
             exit 1
           fi
+
+  # ── Create PR: _ai → feature (when _ai branch passes all checks) ───
+  create_ai_pr_on_pass:
+    needs:
+      - terraform_base
+      - terraform_security
+      - terraform_module_test
+    if: |
+      always() &&
+      inputs.tf_ai_autofix_include &&
+      endsWith(github.head_ref || github.ref_name, '_ai') &&
+      needs.terraform_base.outputs.all_checks_passed == 'true' &&
+      needs.terraform_security.outputs.all_checks_passed == 'true' &&
+      (inputs.tf_terratest_run_tests != true || needs.terraform_module_test.outputs.all_checks_passed == 'true')
+    uses: ./.github/workflows/ai-autofix-create-ai-pr.yml
+    with:
+      runner_type: ${{ inputs.runner_type }}
+      app_id: GH_RELEASE_APP_ID
+      app_private_key: GH_RELEASE_APP_PRIVATE_KEY
+      pr_title: "fix: Terraform autofix for `${{ github.head_ref || github.ref_name }}`"
+      pr_body: |
+        ## 🤖 Terraform AI Autofix (Claude Code)
+
+        All checks passed on `${{ github.head_ref || github.ref_name }}`.
+
+        > Review and merge to apply fixes to the feature branch.
+      pr_ready_comment: |
+        ✅ **All checks passed** on `${{ github.head_ref || github.ref_name }}`.
+
+        This PR is ready for review and merge.
+    secrets: inherit
