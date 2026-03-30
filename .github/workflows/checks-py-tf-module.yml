@@ -34,59 +34,6 @@ on:
         default: main
         required: false
         type: string
-      # ── Python AI Autofix (optional) ───────────────────────────────
-      py_ai_autofix_include:
-        description: "Whether to run Python AI autofix on _cop branch when checks fail"
-        required: false
-        default: false
-        type: boolean
-      py_ai_autofix_flake8:
-        description: "Whether to fix flake8 findings (Python)"
-        required: false
-        default: true
-        type: boolean
-      py_ai_autofix_bandit:
-        description: "Whether to fix bandit findings (Python)"
-        required: false
-        default: true
-        type: boolean
-      py_ai_autofix_tests:
-        description: "Whether to fix failing tests (Python)"
-        required: false
-        default: false
-        type: boolean
-      py_ai_autofix_max_attempts:
-        description: "Maximum number of Python autofix iterations on _cop branch"
-        required: false
-        default: 3
-        type: number
-
-      # ── Terraform AI Autofix (optional) ───────────────────────────
-      tf_ai_autofix_include:
-        description: "Whether to run Terraform AI autofix on _cop branch when checks fail"
-        required: false
-        default: false
-        type: boolean
-      tf_ai_autofix_tflint:
-        description: "Whether to fix TFLint findings (Terraform)"
-        required: false
-        default: true
-        type: boolean
-      tf_ai_autofix_trivy:
-        description: "Whether to fix Trivy findings (Terraform)"
-        required: false
-        default: true
-        type: boolean
-      tf_ai_autofix_checkov:
-        description: "Whether to fix Checkov findings (Terraform)"
-        required: false
-        default: true
-        type: boolean
-      tf_ai_autofix_max_attempts:
-        description: "Maximum number of Terraform autofix iterations on _cop branch"
-        required: false
-        default: 3
-        type: number
 
       # ── Python ────────────────────────────────────────────────────────────
       py_version:
@@ -131,26 +78,6 @@ on:
         default: ""
         required: false
         type: string
-      py_ai_autofix_flake8:
-        description: "Whether Claude should attempt to fix flake8 findings"
-        required: false
-        default: true
-        type: boolean
-      py_ai_autofix_bandit:
-        description: "Whether Claude should attempt to fix bandit findings"
-        required: false
-        default: true
-        type: boolean
-      py_ai_autofix_tests:
-        description: "Whether Claude should attempt to fix failing tests"
-        required: false
-        default: false
-        type: boolean
-      py_ai_autofix_max_attempts:
-        description: "Maximum number of autofix iterations on _cop branch"
-        required: false
-        default: 3
-        type: number
 
       # ── Terraform ─────────────────────────────────────────────────────────
       tf_version:
@@ -213,6 +140,61 @@ on:
         default: "examples"
         required: false
         type: string
+
+              # ── Python AI Autofix (optional) ───────────────────────────────
+      py_ai_autofix_include:
+        description: "Whether to run Python AI autofix on _cop branch when checks fail"
+        required: false
+        default: false
+        type: boolean
+      py_ai_autofix_flake8:
+        description: "Whether to fix flake8 findings (Python)"
+        required: false
+        default: true
+        type: boolean
+      py_ai_autofix_bandit:
+        description: "Whether to fix bandit findings (Python)"
+        required: false
+        default: true
+        type: boolean
+      py_ai_autofix_tests:
+        description: "Whether to fix failing tests (Python)"
+        required: false
+        default: false
+        type: boolean
+      py_ai_autofix_max_attempts:
+        description: "Maximum number of Python autofix iterations on _cop branch"
+        required: false
+        default: 3
+        type: number
+
+      # ── Terraform AI Autofix (optional) ───────────────────────────
+      tf_ai_autofix_include:
+        description: "Whether to run Terraform AI autofix on _cop branch when checks fail"
+        required: false
+        default: false
+        type: boolean
+      tf_ai_autofix_tflint:
+        description: "Whether to fix TFLint findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_trivy:
+        description: "Whether to fix Trivy findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_checkov:
+        description: "Whether to fix Checkov findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_max_attempts:
+        description: "Maximum number of Terraform autofix iterations on _cop branch"
+        required: false
+        default: 3
+        type: number
+
 
     outputs:
       all_checks_passed:
