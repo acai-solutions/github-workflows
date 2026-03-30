@@ -180,7 +180,7 @@ jobs:
       - name: Resolve STS Endpoint
         id: endpoint_domain
         env:
-          AWS_REGION: ${{ vars[format('{0}_TESTBED_AWS_REGION', matrix.test_bed)] }}  # yamllint disable-line
+          AWS_REGION: ${{ matrix.test_bed == 'AWS_ESC' && vars.AWS_ESC_TESTBED_AWS_REGION || vars.AWS_TESTBED_AWS_REGION }}
         run: |
           if [ -z "$AWS_REGION" ]; then
             echo "❌ No AWS region configured for test bed ${{ matrix.test_bed }}" >&2
@@ -317,13 +317,13 @@ jobs:
 
       - name: Write Testbed Tfvars
         env:
-          TESTBED_TFVARS: ${{ vars[format('{0}_TESTBED_TFVARS', matrix.test_bed)] }}
+          TESTBED_TFVARS: ${{ matrix.test_bed == 'AWS_ESC' && vars.AWS_ESC_TESTBED_TFVARS || vars.AWS_TESTBED_TFVARS }}
         run: |
           echo "$TESTBED_TFVARS" > ${{ inputs.terratest_path }}/testbed.tfvar
 
       - name: Write Backend Config
         env:
-          BACKEND_JSON: ${{ vars[format('{0}_TESTBED_BACKEND_JSON', matrix.test_bed)] }}
+          BACKEND_JSON: ${{ matrix.test_bed == 'AWS_ESC' && vars.AWS_ESC_TESTBED_BACKEND_JSON || vars.AWS_TESTBED_BACKEND_JSON }}
         run: |
           if [ -n "$BACKEND_JSON" ]; then
             echo "$BACKEND_JSON" > ${{ inputs.terratest_path }}/backend.json
