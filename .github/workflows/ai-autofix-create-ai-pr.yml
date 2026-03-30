@@ -45,6 +45,10 @@ jobs:
         with:
           github-token: ${{ steps.app_token.outputs.token }}
           script: |
+            const prTitle = process.env.PR_TITLE;
+            const prBody = process.env.PR_BODY;
+            const prReadyComment = process.env.PR_READY_COMMENT;
+
             const aiBranch = context.ref.replace('refs/heads/', '');
             const featureBranch = aiBranch.replace(/_ai$/, '');
 
@@ -63,17 +67,21 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: existing[0].number,
-                body: `${{ inputs.pr_ready_comment }}`,
+                body: prReadyComment,
               });
               core.info(`Updated existing PR: ${existing[0].html_url}`);
             } else {
               const { data: pr } = await github.rest.pulls.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                title: `${{ inputs.pr_title }}`,
+                title: prTitle,
                 head: aiBranch,
                 base: featureBranch,
-                body: `${{ inputs.pr_body }}`,
+                body: prBody,
               });
               core.info(`PR created: ${pr.html_url}`);
             }
+        env:
+          PR_TITLE: ${{ inputs.pr_title }}
+          PR_BODY: ${{ inputs.pr_body }}
+          PR_READY_COMMENT: ${{ inputs.pr_ready_comment }}
