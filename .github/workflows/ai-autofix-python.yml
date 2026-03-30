@@ -57,7 +57,7 @@ on:
         default: "."
         required: false
         type: string
-      py_config_path:
+      py_lint_config_path:
         description: "Path to python config in gh_wf_config_repo"
         default: "python"
         required: false
@@ -270,7 +270,7 @@ jobs:
             echo "✅ Using local .flake8"
           else
             RESP=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.py_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
+              "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.py_lint_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
             CODE=$(echo "$RESP" | tail -n 1)
             BODY=$(echo "$RESP" | head -n -1)
             if [[ "$CODE" == "200" ]]; then

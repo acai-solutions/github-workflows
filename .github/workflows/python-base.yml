@@ -23,7 +23,6 @@ on:
         default: "noreply@github.com"
         required: false
         type: string
-      # GitHub Workflow config repo details
       gh_wf_config_repo:
         description: "Public repo where Python linting config is stored"
         default: "acai-solutions/github-workflow-configs"
@@ -34,24 +33,22 @@ on:
         default: "main"
         required: false
         type: string
-        
-      python_version:
+      py_version:
         description: "Python version"
         default: "3.11"
         required: false
         type: string
-      python_config_path:
+      py_lint_config_path:
         description: 'Path to python config in python_config_repo (e.g. "python")'
         default: "python"
         required: false
         type: string
-
-      linting_include:
-        description: "Whether to include Python or TFLint code quality checks"
+      py_lint_include:
+        description: "Whether to include Python code quality checks"
         required: false
         default: true
         type: boolean
-      linting_allow_failures:
+      py_lint_allow_failures:
         description: "Whether to allow Python linting failures to pass the pipeline"
         required: false
         default: false
@@ -85,7 +82,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ inputs.python_version }}
+          python-version: ${{ inputs.py_version }}
 
       - name: Install Black
         run: pip install black
@@ -154,7 +151,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ inputs.python_version }}
+          python-version: ${{ inputs.py_version }}
 
       - name: Install isort
         run: pip install isort
@@ -223,7 +220,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ inputs.python_version }}
+          python-version: ${{ inputs.py_version }}
 
       - name: Install Flake8
         run: pip install flake8 flake8-json
@@ -323,7 +320,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ inputs.python_version }}
+          python-version: ${{ inputs.py_version }}
 
       - name: Install Bandit
         run: pip install bandit

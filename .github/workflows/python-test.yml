@@ -26,7 +26,7 @@ on:
           Example: '["logging","storage","xml_parser"]'
         required: true
         type: string
-      py_extra_pip_packages:
+      py_test_extra_pip_packages:
         description: >
           Space-separated pip packages to install on top of the editable
           package itself.  Example: "lxml beautifulsoup4 psycopg2-binary"
@@ -73,8 +73,8 @@ jobs:
           pip install -e .
 
           # Extra packages requested by the caller
-          if [[ -n "${{ inputs.py_extra_pip_packages }}" ]]; then
-            pip install ${{ inputs.py_extra_pip_packages }}
+          if [[ -n "${{ inputs.py_test_extra_pip_packages }}" ]]; then
+            pip install ${{ inputs.py_test_extra_pip_packages }}
           fi
 
       - name: Run tests — ${{ matrix.module }}
