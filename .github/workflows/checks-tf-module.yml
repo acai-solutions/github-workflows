@@ -303,6 +303,7 @@ jobs:
       runner_type: ${{ inputs.runner_type }}
       app_id: GH_RELEASE_APP_ID
       app_private_key: GH_RELEASE_APP_PRIVATE_KEY
+      ai_branch: ${{ github.head_ref || github.ref_name }}
       pr_title: "fix: Terraform autofix for `${{ github.head_ref || github.ref_name }}`"
       pr_body: |
         ## 🤖 Terraform AI Autofix (Claude Code)

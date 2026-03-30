@@ -28,10 +28,21 @@ on:
         description: Comment to add if PR already exists and checks passed
         required: true
         type: string
+      ai_branch:
+        description: Name of the _ai branch (e.g. feature_ai)
+        required: true
+        type: string
+      feature_branch:
+        description: Name of the feature branch (e.g. feature). If omitted, derived from ai_branch by stripping _ai suffix.
+        required: false
+        default: ''
+        type: string
 
 jobs:
   create_ai_pr:
     runs-on: ${{ inputs.runner_type }}
+    permissions:
+      pull-requests: write
     steps:
       - name: Generate GitHub App Token
         id: app_token
@@ -48,9 +59,8 @@ jobs:
             const prTitle = process.env.PR_TITLE;
             const prBody = process.env.PR_BODY;
             const prReadyComment = process.env.PR_READY_COMMENT;
-
-            const aiBranch = context.ref.replace('refs/heads/', '');
-            const featureBranch = aiBranch.replace(/_ai$/, '');
+            const aiBranch = process.env.AI_BRANCH;
+            const featureBranch = process.env.FEATURE_BRANCH || aiBranch.replace(/_ai$/, '');
 
             core.info(`_ai: ${aiBranch} → feature: ${featureBranch}`);
 
@@ -85,3 +95,5 @@ jobs:
           PR_TITLE: ${{ inputs.pr_title }}
           PR_BODY: ${{ inputs.pr_body }}
           PR_READY_COMMENT: ${{ inputs.pr_ready_comment }}
+          AI_BRANCH: ${{ inputs.ai_branch }}
+          FEATURE_BRANCH: ${{ inputs.feature_branch }}

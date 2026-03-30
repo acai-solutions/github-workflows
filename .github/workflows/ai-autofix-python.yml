@@ -642,6 +642,8 @@ jobs:
       runner_type: ${{ inputs.runner_type }}
       app_id: GH_RELEASE_APP_ID
       app_private_key: GH_RELEASE_APP_PRIVATE_KEY
+      ai_branch: ${{ needs.guard.outputs.ai_branch }}
+      feature_branch: ${{ needs.guard.outputs.feature_branch }}
       pr_title: "fix: Python autofix für `${{ needs.guard.outputs.feature_branch }}` (iteration ${{ needs.autofix.outputs.next_iteration }})"
       pr_body: |
         ## 🤖 Python AI Autofix (Claude Code)
