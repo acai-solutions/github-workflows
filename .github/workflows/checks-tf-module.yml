@@ -120,7 +120,7 @@ on:
         type: string
 
       # AI Autofix (optional)
-      autofix_include:
+      ai_autofix_include:
         description: "Whether to run terraform-ai-autofix on _cop branch when checks fail"
         required: false
         default: false
@@ -141,9 +141,9 @@ on:
       autofix_applied:
         description: Whether terraform-ai-autofix was applied
         value: ${{ jobs.terraform_ai_autofix.outputs.fixes_applied }}
-      cop_branch:
+      ai_branch:
         description: Name of the _cop branch used for fixes
-        value: ${{ jobs.terraform_ai_autofix.outputs.cop_branch }}
+        value: ${{ jobs.terraform_ai_autofix.outputs.ai_branch }}
 
 concurrency:
   group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
@@ -202,7 +202,7 @@ jobs:
       - terraform_module_test
     if: |
       always() &&
-      inputs.autofix_include &&
+      inputs.ai_autofix_include &&
       (needs.terraform_base.outputs.all_checks_passed != 'true' ||
        needs.terraform_security.outputs.all_checks_passed != 'true' ||
        (needs.terraform_module_test.result != 'skipped' &&

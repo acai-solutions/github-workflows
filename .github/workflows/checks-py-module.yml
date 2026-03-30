@@ -33,6 +33,11 @@ on:
         default: main
         required: false
         type: string
+      python_version:
+        description: Python version
+        default: "3.11"
+        required: false
+        type: string
       linting_include:
         description: Whether to include Python code quality checks
         required: false
@@ -43,14 +48,14 @@ on:
         required: false
         default: false
         type: boolean
-      python_version:
-        description: Python version
-        default: "3.11"
-        required: false
-        type: string
       python_lint_config_path:
         description: Path to python config in gh_wf_config_repo (e.g. "python")
         default: python
+        required: false
+        type: string
+      python_source_path:
+        description: Relative path from repo root to the Python package root (where pyproject.toml lives)
+        default: shared/python
         required: false
         type: string
       testing_include:
@@ -58,11 +63,6 @@ on:
         required: false
         default: false
         type: boolean
-      python_source_path:
-        description: Relative path from repo root to the Python package root (where pyproject.toml lives)
-        default: shared/python
-        required: false
-        type: string
       test_modules:
         description: >
           JSON array of module names whose _test/ folders should be exercised.
@@ -77,22 +77,22 @@ on:
         type: string
 
       # ── AI Autofix (optional) ───────────────────────────────────────────
-      autofix_include:
+      ai_autofix_include:
         description: "Whether to run AI autofix on _cop branch when checks fail"
         required: false
         default: false
         type: boolean
-      copilot_fix_flake8:
+      ai_autofix_flake8:
         description: "Whether Claude should fix flake8 findings"
         required: false
         default: true
         type: boolean
-      copilot_fix_bandit:
+      ai_autofix_bandit:
         description: "Whether Claude should fix bandit findings"
         required: false
         default: true
         type: boolean
-      copilot_fix_tests:
+      ai_autofix_tests:
         description: "Whether Claude should fix failing tests"
         required: false
         default: false
@@ -111,9 +111,9 @@ on:
       autofix_applied:
         description: Whether AI autofix was applied
         value: ${{ jobs.python_ai_autofix.outputs.fixes_applied }}
-      cop_branch:
+      ai_branch:
         description: Name of the _cop branch used for fixes
-        value: ${{ jobs.python_ai_autofix.outputs.cop_branch }}
+        value: ${{ jobs.python_ai_autofix.outputs.ai_branch }}
 
 concurrency:
   group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
@@ -160,7 +160,7 @@ jobs:
       - python_tests
     if: |
       always() &&
-      inputs.autofix_include &&
+      inputs.ai_autofix_include &&
       (needs.python_base.outputs.all_steps_passed != 'true' ||
        needs.python_tests.outputs.all_tests_passed != 'true') &&
       !(needs.python_base.result == 'skipped' &&
@@ -170,9 +170,9 @@ jobs:
       runner_type: ${{ inputs.runner_type }}
       python_version: ${{ inputs.python_version }}
       python_source_path: ${{ inputs.python_source_path }}
-      copilot_fix_flake8: ${{ inputs.copilot_fix_flake8 }}
-      copilot_fix_bandit: ${{ inputs.copilot_fix_bandit }}
-      copilot_fix_tests: ${{ inputs.copilot_fix_tests }}
+      ai_autofix_flake8: ${{ inputs.ai_autofix_flake8 }}
+      ai_autofix_bandit: ${{ inputs.ai_autofix_bandit }}
+      ai_autofix_tests: ${{ inputs.ai_autofix_tests }}
       test_modules: ${{ inputs.test_modules }}
       commit_user: ${{ inputs.commit_user }}
       commit_email: ${{ inputs.commit_email }}

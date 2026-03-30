@@ -1,5 +1,5 @@
 ---
-name: Create PR from _cop to feature branch
+name: Create PR from *_ai to feature branch
 on:
   workflow_call:
     inputs:
@@ -30,7 +30,7 @@ on:
         type: string
 
 jobs:
-  create_cop_pr:
+  create_ai_pr:
     runs-on: ${{ inputs.runner_type }}
     steps:
       - name: Generate GitHub App Token
@@ -40,20 +40,20 @@ jobs:
           app-id: ${{ secrets[inputs.app_id] }}
           private-key: ${{ secrets[inputs.app_private_key] }}
 
-      - name: "Create PR: _cop → feature branch"
+      - name: "Create PR: *_ai → feature branch"
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app_token.outputs.token }}
           script: |
-            const copBranch = context.ref.replace('refs/heads/', '');
-            const featureBranch = copBranch.replace(/_cop$/, '');
+            const aiBranch = context.ref.replace('refs/heads/', '');
+            const featureBranch = aiBranch.replace(/_ai$/, '');
 
-            core.info(`_cop: ${copBranch} → feature: ${featureBranch}`);
+            core.info(`_ai: ${aiBranch} → feature: ${featureBranch}`);
 
             const { data: existing } = await github.rest.pulls.list({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              head: `${context.repo.owner}:${copBranch}`,
+              head: `${context.repo.owner}:${aiBranch}`,
               base: featureBranch,
               state: 'open',
             });
@@ -71,7 +71,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 title: `${{ inputs.pr_title }}`,
-                head: copBranch,
+                head: aiBranch,
                 base: featureBranch,
                 body: `${{ inputs.pr_body }}`,
               });
