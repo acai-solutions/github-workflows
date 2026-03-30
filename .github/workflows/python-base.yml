@@ -35,17 +35,6 @@ on:
         required: false
         type: string
         
-      linting_include:
-        description: "Whether to include Python or TFLint code quality checks"
-        required: false
-        default: true
-        type: boolean
-      linting_allow_failures:
-        description: "Whether to allow Python linting failures to pass the pipeline"
-        required: false
-        default: false
-        type: boolean
-
       python_version:
         description: "Python version"
         default: "3.11"
@@ -56,6 +45,17 @@ on:
         default: "python"
         required: false
         type: string
+
+      linting_include:
+        description: "Whether to include Python or TFLint code quality checks"
+        required: false
+        default: true
+        type: boolean
+      linting_allow_failures:
+        description: "Whether to allow Python linting failures to pass the pipeline"
+        required: false
+        default: false
+        type: boolean
 
     outputs:
       all_steps_passed:

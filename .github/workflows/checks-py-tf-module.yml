@@ -41,64 +41,64 @@ on:
         type: boolean
 
       # ── Python ────────────────────────────────────────────────────────────
-      python_version:
+      py_version:
         description: Python version
         default: "3.11"
         required: false
         type: string
-      python_linting_include:
-        description: Whether to include linting/code quality checks
-        required: false
-        default: true
-        type: boolean
-      python_linting_allow_failures:
-        description: Whether to allow linting failures to pass the pipeline
-        required: false
-        default: false
-        type: boolean
-      python_lint_config_path:
-        description: Path to python config in gh_wf_config_repo (e.g. "python")
-        default: python
-        required: false
-        type: string
-      python_source_path:
+      py_source_path:
         description: "Relative path from repo root to the Python package root"
         default: "."
         required: false
         type: string
-      python_testing_include:
+      py_lint_include:
+        description: Whether to include linting/code quality checks
+        required: false
+        default: true
+        type: boolean
+      py_lint_allow_failures:
+        description: Whether to allow linting failures to pass the pipeline
+        required: false
+        default: false
+        type: boolean
+      py_lint_config_path:
+        description: Path to python config in gh_wf_config_repo (e.g. "python")
+        default: python
+        required: false
+        type: string
+      py_testing_include:
         description: Whether to include pytest module tests
         required: false
         default: false
         type: boolean
-      python_test_modules:
+      py_test_modules:
         description: >
           JSON array of module names whose _test/ folders should be exercised.
           Example: '["logging","storage","xml_parser"]'
         default: "[]"
         required: false
         type: string
-      python_ai_autofix_flake8:
-        description: "Whether Claude should attempt to fix flake8 findings"
-        required: false
-        default: true
-        type: boolean
-      python_ai_autofix_bandit:
-        description: "Whether Claude should attempt to fix bandit findings"
-        required: false
-        default: true
-        type: boolean
-      python_ai_autofix_tests:
-        description: "Whether Claude should attempt to fix failing tests"
-        required: false
-        default: false
-        type: boolean
-      python_extra_pip_packages:
+      py_test_extra_pip_packages:
         description: "Space-separated pip packages to install for autofix"
         default: ""
         required: false
         type: string
-      python_ai_autofix_max_attempts:
+      py_ai_autofix_flake8:
+        description: "Whether Claude should attempt to fix flake8 findings"
+        required: false
+        default: true
+        type: boolean
+      py_ai_autofix_bandit:
+        description: "Whether Claude should attempt to fix bandit findings"
+        required: false
+        default: true
+        type: boolean
+      py_ai_autofix_tests:
+        description: "Whether Claude should attempt to fix failing tests"
+        required: false
+        default: false
+        type: boolean
+      py_ai_autofix_max_attempts:
         description: "Maximum number of autofix iterations on _cop branch"
         required: false
         default: 3
@@ -211,18 +211,18 @@ jobs:
       commit_email: ${{ inputs.commit_email }}
       gh_wf_config_repo: ${{ inputs.gh_wf_config_repo }}
       gh_wf_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
-      linting_include: ${{ inputs.python_linting_include }}
-      linting_allow_failures: ${{ inputs.python_linting_allow_failures }}
-      python_version: ${{ inputs.python_version }}
-      python_lint_config_path: ${{ inputs.python_lint_config_path }}
-      testing_include: ${{ inputs.python_testing_include }}
-      test_modules: ${{ inputs.python_test_modules }}
-      python_source_path: ${{ inputs.python_source_path }}
-      extra_pip_packages: ${{ inputs.python_extra_pip_packages }}
+      py_version: ${{ inputs.py_version }}
+      py_source_path: ${{ inputs.py_source_path }}
+      py_lint_include: ${{ inputs.py_lint_include }}
+      py_lint_allow_failures: ${{ inputs.py_lint_allow_failures }}
+      py_lint_config_path: ${{ inputs.py_lint_config_path }}
+      py_testing_include: ${{ inputs.py_testing_include }}
+      py_test_modules: ${{ inputs.py_test_modules }}
+      py_test_extra_pip_packages: ${{ inputs.py_test_extra_pip_packages }}
       ai_autofix_include: ${{ inputs.ai_autofix_include }}
-      ai_autofix_flake8: ${{ inputs.python_ai_autofix_flake8 }}
-      ai_autofix_bandit: ${{ inputs.python_ai_autofix_bandit }}
-      ai_autofix_tests: ${{ inputs.python_ai_autofix_tests }}
+      ai_autofix_flake8: ${{ inputs.py_ai_autofix_flake8 }}
+      ai_autofix_bandit: ${{ inputs.py_ai_autofix_bandit }}
+      ai_autofix_tests: ${{ inputs.py_ai_autofix_tests }}
     secrets: inherit
 
   # 2) Then run Terraform checks (only if Python passed)

@@ -27,28 +27,6 @@ on:
         required: false
         default: "ubuntu-latest"
         type: string
-      python_version:
-        description: "Python version"
-        default: "3.12"
-        required: false
-        type: string
-      python_source_path:
-        description: "Relative path from repo root to the Python package root"
-        default: "."
-        required: false
-        type: string
-      test_modules:
-        description: >
-          JSON array of module names whose _test/ folders should be exercised.
-          Example: '["logging","storage","xml_parser"]'
-        default: "[]"
-        required: false
-        type: string
-      extra_pip_packages:
-        description: "Space-separated extra pip packages to install"
-        default: ""
-        required: false
-        type: string
       gh_wf_config_repo:
         description: "Public repo where linting config is stored"
         default: "acai-solutions/github-workflow-configs"
@@ -59,9 +37,41 @@ on:
         default: "main"
         required: false
         type: string
-      python_config_path:
+      commit_user:
+        description: "Username for autofix commits"
+        default: "github-actions[bot]"
+        required: false
+        type: string
+      commit_email:
+        description: "Email for autofix commits"
+        default: "41898282+github-actions[bot]@users.noreply.github.com"
+        required: false
+        type: string
+      py_version:
+        description: "Python version"
+        default: "3.12"
+        required: false
+        type: string
+      py_source_path:
+        description: "Relative path from repo root to the Python package root"
+        default: "."
+        required: false
+        type: string
+      py_config_path:
         description: "Path to python config in gh_wf_config_repo"
         default: "python"
+        required: false
+        type: string
+      py_test_modules:
+        description: >
+          JSON array of module names whose _test/ folders should be exercised.
+          Example: '["logging","storage","xml_parser"]'
+        default: "[]"
+        required: false
+        type: string
+      py_test_extra_pip_packages:
+        description: "Space-separated extra pip packages to install"
+        default: ""
         required: false
         type: string
       ai_autofix_flake8:
@@ -84,21 +94,6 @@ on:
         required: false
         default: 3
         type: number
-      commit_user:
-        description: "Username for autofix commits"
-        default: "github-actions[bot]"
-        required: false
-        type: string
-      commit_email:
-        description: "Email for autofix commits"
-        default: "41898282+github-actions[bot]@users.noreply.github.com"
-        required: false
-        type: string
-      fix_python:
-        description: "Whether to run Python fixes (flake8, bandit, tests)"
-        required: false
-        default: true
-        type: boolean
     secrets:
       GH_RELEASE_APP_ID:
         required: true
@@ -239,10 +234,10 @@ jobs:
           echo "✅ Branch: $(git branch --show-current)"
 
       # ── Python environment ──────────────────────────────────────────────
-      - name: Set up Python ${{ inputs.python_version }}
+      - name: Set up Python ${{ inputs.py_version }}
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ inputs.python_version }}
+          python-version: ${{ inputs.py_version }}
           cache: pip
 
       - name: Install tools and project
@@ -254,8 +249,8 @@ jobs:
             pip install ${{ inputs.extra_pip_packages }}
           fi
 
-          if [[ -f "${{ inputs.python_source_path }}/pyproject.toml" ]]; then
-            pip install -e "${{ inputs.python_source_path }}"
+          if [[ -f "${{ inputs.py_source_path }}/pyproject.toml" ]]; then
+            pip install -e "${{ inputs.py_source_path }}"
           fi
 
           if [[ "${{ inputs.ai_autofix_tests }}" == "true" ]]; then
@@ -269,13 +264,13 @@ jobs:
       - name: Fetch flake8 config
         if: inputs.ai_autofix_flake8
         run: |
-          SRC="${{ inputs.python_source_path }}"
+          SRC="${{ inputs.py_source_path }}"
 
           if [[ -f ".flake8" ]]; then
             echo "✅ Using local .flake8"
           else
             RESP=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.python_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
+              "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.py_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
             CODE=$(echo "$RESP" | tail -n 1)
             BODY=$(echo "$RESP" | head -n -1)
             if [[ "$CODE" == "200" ]]; then
@@ -294,7 +289,7 @@ jobs:
         if: inputs.ai_autofix_flake8
         id: run_flake8
         run: |
-          cd "${{ inputs.python_source_path }}"
+          cd "${{ inputs.py_source_path }}"
           flake8 . --format=default > /tmp/flake8-findings.txt 2>&1 || true
 
           if [[ -s /tmp/flake8-findings.txt ]]; then
@@ -317,12 +312,12 @@ jobs:
           prompt: |
             Fix all flake8 findings in /tmp/flake8-findings.txt.
 
-            Working directory: ${{ inputs.python_source_path }}
+            Working directory: ${{ inputs.py_source_path }}
 
             Steps:
             1. Read /tmp/flake8-findings.txt to see every finding.
             2. For each finding, edit the source file to fix the issue.
-            3. Re-run: cd ${{ inputs.python_source_path }} && flake8 . --format=default
+            3. Re-run: cd ${{ inputs.py_source_path }} && flake8 . --format=default
             4. Iterate until flake8 is clean.
 
             Common fixes:
@@ -333,7 +328,7 @@ jobs:
             - C901 too complex → extract helper functions
 
             Rules:
-            - Only edit files under ${{ inputs.python_source_path }}/
+            - Only edit files under ${{ inputs.py_source_path }}/
             - Do NOT modify .flake8, pyproject.toml, or any config file.
             - Do NOT add comments explaining your changes.
             - Do NOT commit anything — just edit files.
@@ -356,7 +351,7 @@ jobs:
       - name: Clean up copied .flake8
         if: inputs.ai_autofix_flake8
         run: |
-          SRC="${{ inputs.python_source_path }}"
+          SRC="${{ inputs.py_source_path }}"
           if [[ "${SRC}" != "." && -f "${SRC}/.flake8" ]]; then
             if ! git show HEAD:"${SRC}/.flake8" &>/dev/null 2>&1; then
               rm -f "${SRC}/.flake8"
@@ -393,7 +388,7 @@ jobs:
         if: inputs.ai_autofix_bandit
         id: run_bandit
         run: |
-          cd "${{ inputs.python_source_path }}"
+          cd "${{ inputs.py_source_path }}"
           bandit -r . -f txt > /tmp/bandit-findings.txt 2>&1 || true
 
           if grep -q "Issue:" /tmp/bandit-findings.txt; then
@@ -416,7 +411,7 @@ jobs:
           prompt: |
             Fix all security findings in /tmp/bandit-findings.txt.
 
-            Working directory: ${{ inputs.python_source_path }}
+            Working directory: ${{ inputs.py_source_path }}
 
             Steps:
             1. Read /tmp/bandit-findings.txt to see every finding.
@@ -424,11 +419,11 @@ jobs:
             3. For hardcoded secrets: replace with os.environ lookups or config files.
             4. For unsafe functions: replace with safe alternatives.
             5. If a finding is a confirmed false positive (e.g. test fixtures): add # nosec BXXX with the exact code.
-            6. Re-run: cd ${{ inputs.python_source_path }} && bandit -r . -f txt
+            6. Re-run: cd ${{ inputs.py_source_path }} && bandit -r . -f txt
             7. Iterate until no fixable findings remain.
 
             Rules:
-            - Only edit files under ${{ inputs.python_source_path }}/
+            - Only edit files under ${{ inputs.py_source_path }}/
             - Do NOT modify pyproject.toml or any config file.
             - Do NOT add explanatory comments (# nosec comments are allowed).
             - Do NOT commit anything — just edit files.
@@ -477,7 +472,7 @@ jobs:
         if: inputs.ai_autofix_tests
         id: run_pytest
         run: |
-          SRC="${{ inputs.python_source_path }}"
+          SRC="${{ inputs.py_source_path }}"
           TEST_MODULES='${{ inputs.test_modules }}'
           PYTEST_PATHS=""
 
@@ -526,7 +521,7 @@ jobs:
           prompt: |
             Fix the failing tests listed in /tmp/pytest-failures.txt.
 
-            Working directory: ${{ inputs.python_source_path }}
+            Working directory: ${{ inputs.py_source_path }}
 
             Steps:
             1. Read /tmp/pytest-failures.txt to identify every failure.
@@ -536,7 +531,7 @@ jobs:
             5. Iterate until all previously failing tests pass.
 
             Rules:
-            - Only edit files under ${{ inputs.python_source_path }}/
+            - Only edit files under ${{ inputs.py_source_path }}/
             - Do NOT weaken, remove, or skip test assertions.
             - Do NOT add comments explaining your changes.
             - Do NOT commit anything — just edit files.
