@@ -13,58 +13,52 @@ on:
         required: false
         default: "ubuntu-latest"
         type: string
-      tfc_hostname:
-        description: "Hostname for terraform cloud/enterprise"
-        default: "app.terraform.io"
-        required: false
-        type: string
-      terraform_version:
+      tf_version:
         description: "Terraform version used for Terratest"
         default: "latest"
         required: false
         type: string
-      registry_hostname:
+      tf_registry_hostname:
         description: "Hostname for terraform registry used to download providers"
         default: "registry.terraform.io"
         required: false
         type: string
-        
-      terratest_config_repo:
+      tf_terratest_config_repo:
         description: "Public repo where terratest matrix json is stored"
         default: "acai-solutions/github-workflow-configs"
         required: false
         type: string
-      terratest_config_repo_ref:
+      tf_terratest_config_repo_ref:
         description: "Ref or branch of terratest_config_repo"
         default: "main"
         required: false
         type: string
-      terratest_path:
+      tf_terratest_path:
         description: "Path to terratest directory"
         default: "test/terratest"
         required: false
         type: string
-      terratest_examples_path:
+      tf_terratest_examples_path:
         description: "Path to terratest examples directory"
         default: "examples"
         required: false
         type: string
-      terratest_max_parallel:
+      tf_terratest_max_parallel:
         description: "Maximum number of terratest runs that should run simultaneously"
         default: 1
         required: false
         type: number
-      test_beds:
+      tf_test_beds:
         description: "List of test beds to run tests against (JSON array of cloud provider prefixes, e.g. [\"AWS\"])"
         default: '["AWS"]'
         required: false
         type: string
-      test_bed_aws_terratest_config:
+      tf_test_bed_aws_terratest_config:
         description: 'Path to AWS terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws/matrix.json")'
         default: "aws/matrix_tf1x5x7_aws5x80x0.json"
         required: false
         type: string
-      test_bed_aws_esc_terratest_config:
+      tf_test_bed_aws_esc_terratest_config:
         description: 'Path to AWS-ESC terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws-esc/matrix.json")'
         default: "aws/matrix_tf1x14x0_aws6x29x0.json"
         required: false
@@ -74,9 +68,6 @@ on:
         required: true
       GH_REPO_READ_APP_PRIVATE_KEY:
         required: true
-      TFC_API_TOKEN:
-        required: true
-      # Default AWS Testbed
       AWS_TESTBED_OIDC_ROLE_ARN:
         required: true
       # Optional AWS-ESC Testbed
@@ -96,7 +87,7 @@ jobs:
     steps:
       # Obtain GitHub App installation token for repo access
       - name: Get GitHub App Token
-        if: ${{ inputs.test_beds != '[]' }}
+        if: ${{ inputs.tf_test_beds != '[]' }}
         id: app-token
         uses: actions/create-github-app-token@v2
         with:
@@ -105,25 +96,25 @@ jobs:
           owner: ${{ github.repository_owner }}
 
       - name: Checkout
-        if: ${{ inputs.test_beds != '[]' }}
+        if: ${{ inputs.tf_test_beds != '[]' }}
         uses: actions/checkout@v5
         with:
-          repository: ${{ inputs.terratest_config_repo }}
-          ref: ${{ inputs.terratest_config_repo_ref }}
+          repository: ${{ inputs.tf_terratest_config_repo }}
+          ref: ${{ inputs.tf_terratest_config_repo_ref }}
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Get Terratest Matrix Config
-        if: ${{ inputs.test_beds != '[]' }}
+        if: ${{ inputs.tf_test_beds != '[]' }}
         id: set_matrix
         run: |
           # Build combined matrix from all configured test beds
           COMBINED='{"include":[]}'
-          TEST_BEDS='${{ inputs.test_beds }}'
+          TEST_BEDS='${{ inputs.tf_test_beds }}'
           
           # Process AWS test bed config if "AWS" is in test_beds
           if echo "$TEST_BEDS" | jq -e 'index("AWS")' > /dev/null 2>&1; then
-            if [ -n "${{ inputs.test_bed_aws_terratest_config }}" ]; then
-              AWS_JSON=$(cat terraform/terratest/${{ inputs.test_bed_aws_terratest_config }} | jq -c .)
+            if [ -n "${{ inputs.tf_test_bed_aws_terratest_config }}" ]; then
+              AWS_JSON=$(cat terraform/terratest/${{ inputs.tf_test_bed_aws_terratest_config }} | jq -c .)
               AWS_MATRIX=$(echo "$AWS_JSON" | jq -c 'if has("include") then .include else [.] end | [.[] + {test_bed: "AWS"}]')
               COMBINED=$(echo "$COMBINED" | jq -c --argjson items "$AWS_MATRIX" '.include += $items')
             fi
@@ -131,8 +122,8 @@ jobs:
           
           # Process AWS-ESC test bed config if "AWS_ESC" is in test_beds
           if echo "$TEST_BEDS" | jq -e 'index("AWS_ESC")' > /dev/null 2>&1; then
-            if [ -n "${{ inputs.test_bed_aws_esc_terratest_config }}" ]; then
-              AWS_ESC_JSON=$(cat terraform/terratest/${{ inputs.test_bed_aws_esc_terratest_config }} | jq -c .)
+            if [ -n "${{ inputs.tf_test_bed_aws_esc_terratest_config }}" ]; then
+              AWS_ESC_JSON=$(cat terraform/terratest/${{ inputs.tf_test_bed_aws_esc_terratest_config }} | jq -c .)
               AWS_ESC_MATRIX=$(echo "$AWS_ESC_JSON" | jq -c 'if has("include") then .include else [.] end | [.[] + {test_bed: "AWS_ESC"}]')
               COMBINED=$(echo "$COMBINED" | jq -c --argjson items "$AWS_ESC_MATRIX" '.include += $items')
             fi
@@ -152,7 +143,7 @@ jobs:
       contents: read
 
     strategy:
-      max-parallel: ${{ inputs.terratest_max_parallel }}
+      max-parallel: ${{ inputs.tf_terratest_max_parallel }}
       matrix: ${{ fromJson(needs.terratest_config.outputs.matrix) }}
 
     steps:
@@ -214,11 +205,11 @@ jobs:
           echo "Repository structure:"
           find . -maxdepth 3 -type d -not -path "*/\.*" | sort
           
-          echo "Checking for ${{ inputs.terratest_path }} directory..."
-          if [ -d "${{ inputs.terratest_path }}" ]; then
-            echo "✅ ${{ inputs.terratest_path }} directory exists"
+          echo "Checking for ${{ inputs.tf_terratest_path }} directory..."
+          if [ -d "${{ inputs.tf_terratest_path }}" ]; then
+            echo "✅ ${{ inputs.tf_terratest_path }} directory exists"
           else
-            echo "❌ ${{ inputs.terratest_path }} directory not found"
+            echo "❌ ${{ inputs.tf_terratest_path }} directory not found"
             exit 1
           fi
           
@@ -239,7 +230,7 @@ jobs:
           fi
 
       - name: Get Dependencies
-        working-directory: ${{ inputs.terratest_path }}
+        working-directory: ${{ inputs.tf_terratest_path }}
         run: |
           go mod init test/terratest || true
           go get github.com/gruntwork-io/terratest/modules/terraform@v0.40.8
@@ -251,10 +242,8 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
         with:
-          terraform_version: ${{ matrix.terraform_version }}
+          terraform_version: ${{ matrix.tf_version }}
           terraform_wrapper: false
-          cli_config_credentials_hostname: ${{ inputs.tfc_hostname }}
-          cli_config_credentials_token: ${{ secrets.TFC_API_TOKEN }}
 
       - name: Output Terraform Version
         run: terraform version
@@ -262,13 +251,13 @@ jobs:
       - name: Generate Terraform Lock File
         if: ${{ matrix.provider_version != '' }}
         id: terraform_lock_file
-        working-directory: ${{ inputs.terratest_examples_path }}
+        working-directory: ${{ inputs.tf_terratest_examples_path }}
         env:
           PROVIDER_JSON: ${{ toJson(matrix.provider_version) }}
         run: |
           for d in */; do
             # create artifact name for github action
-            artifact_name="terraform version $(echo "${{ matrix.terraform_version }}")<br>"
+            artifact_name="terraform version $(echo "${{ matrix.tf_version }}")<br>"
             # mainize terraform lock file
             touch "$d/.terraform.lock.hcl"
             # get required provider versions from matrix json
@@ -309,7 +298,7 @@ jobs:
               # append provider versions to artifact name
               artifact_name+="provider $(echo "$provider" | sed 's:\/:\.:g') = ${version}<br>"
               # generate terraform lock file for each provider in each terratest example directory
-              echo -en "provider \"${{ inputs.registry_hostname }}/$provider\" {\n  version = \"$version\"\n}\n\n" >> "$d/.terraform.lock.hcl"
+              echo -en "provider \"${{ inputs.tf_registry_hostname }}/$provider\" {\n  version = \"$version\"\n}\n\n" >> "$d/.terraform.lock.hcl"
             done
             cat "$d/.terraform.lock.hcl"
             echo "artifact_name=${artifact_name}" >> $GITHUB_OUTPUT
@@ -319,26 +308,26 @@ jobs:
         env:
           TESTBED_TFVARS: ${{ matrix.test_bed == 'AWS_ESC' && vars.AWS_ESC_TESTBED_TFVARS || vars.AWS_TESTBED_TFVARS }}
         run: |
-          echo "$TESTBED_TFVARS" > ${{ inputs.terratest_path }}/testbed.tfvar
+          echo "$TESTBED_TFVARS" > ${{ inputs.tf_terratest_path }}/testbed.tfvar
 
       - name: Write Backend Config
         env:
           BACKEND_JSON: ${{ matrix.test_bed == 'AWS_ESC' && vars.AWS_ESC_TESTBED_BACKEND_JSON || vars.AWS_TESTBED_BACKEND_JSON }}
         run: |
           if [ -n "$BACKEND_JSON" ]; then
-            echo "$BACKEND_JSON" > ${{ inputs.terratest_path }}/backend.json
-            echo "✅ Backend config written to ${{ inputs.terratest_path }}/backend.json"
+            echo "$BACKEND_JSON" > ${{ inputs.tf_terratest_path }}/backend.json
+            echo "✅ Backend config written to ${{ inputs.tf_terratest_path }}/backend.json"
           else
             echo "⚠️ No backend config found for test bed ${{ matrix.test_bed }}, skipping"
           fi
 
       - name: Run Terratest
         id: terratest_run
-        working-directory: ${{ inputs.terratest_path }}
+        working-directory: ${{ inputs.tf_terratest_path }}
         env:
-          TF_CLI_ARGS_plan: "-var-file=${{ github.workspace }}/${{ inputs.terratest_path }}/testbed.tfvar"
-          TF_CLI_ARGS_apply: "-var-file=${{ github.workspace }}/${{ inputs.terratest_path }}/testbed.tfvar"
-          TF_CLI_ARGS_destroy: "-var-file=${{ github.workspace }}/${{ inputs.terratest_path }}/testbed.tfvar"
+          TF_CLI_ARGS_plan: "-var-file=${{ github.workspace }}/${{ inputs.tf_terratest_path }}/testbed.tfvar"
+          TF_CLI_ARGS_apply: "-var-file=${{ github.workspace }}/${{ inputs.tf_terratest_path }}/testbed.tfvar"
+          TF_CLI_ARGS_destroy: "-var-file=${{ github.workspace }}/${{ inputs.tf_terratest_path }}/testbed.tfvar"
         run: |
           go test -v -timeout 60m 2>&1 | tee >(./terratest_log_parser_linux_amd64)
           test ${PIPESTATUS[0]} -eq 0
@@ -348,7 +337,7 @@ jobs:
       - name: Terratest Summary
         if: ${{ always() }}
         id: terratest_summary
-        working-directory: ${{ inputs.terratest_path }}
+        working-directory: ${{ inputs.tf_terratest_path }}
         run: |
           echo '### TERRATEST SUMMARY :octocat:' >> $GITHUB_STEP_SUMMARY
           echo '${{ steps.terraform_lock_file.outputs.artifact_name }}' >> $GITHUB_STEP_SUMMARY

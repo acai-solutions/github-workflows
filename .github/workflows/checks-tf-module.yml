@@ -199,6 +199,7 @@ jobs:
     if: ${{ inputs.tf_terratest_run_tests && needs.terraform_security.outputs.all_checks_passed == 'true' }}
     uses: ./.github/workflows/tf-module-test.yml
     with:
+      tf_version: ${{ inputs.tf_version }}
       tf_terratest_config_repo: ${{ inputs.gh_wf_config_repo }}
       tf_terratest_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
       tf_terratest_path: ${{ inputs.tf_terratest_path }}
