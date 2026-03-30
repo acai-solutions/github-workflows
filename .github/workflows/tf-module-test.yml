@@ -177,13 +177,32 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
 
+      - name: Resolve STS Endpoint
+        id: endpoint_domain
+        env:
+          AWS_REGION: ${{ vars[format('{0}_TESTBED_AWS_REGION', matrix.test_bed)] }}  # yamllint disable-line
+        run: |
+          if [ -z "$AWS_REGION" ]; then
+            echo "❌ No AWS region configured for test bed ${{ matrix.test_bed }}" >&2
+            echo "   Expected repository variable: ${{ matrix.test_bed }}_TESTBED_AWS_REGION" >&2
+            exit 1
+          fi
+          echo "aws_region=$AWS_REGION" >> $GITHUB_OUTPUT
+          if [[ "$AWS_REGION" == us-gov-* ]]; then
+            echo "sts_endpoint=https://sts.${AWS_REGION}.amazonaws.com" >> $GITHUB_OUTPUT
+          elif [[ "$AWS_REGION" == cn-* ]]; then
+            echo "sts_endpoint=https://sts.${AWS_REGION}.amazonaws.com.cn" >> $GITHUB_OUTPUT
+          else
+            echo "sts_endpoint=" >> $GITHUB_OUTPUT
+          fi
+
       - name: Configure AWS Credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         env:
           AWS_ENDPOINT_URL_STS: ${{ steps.endpoint_domain.outputs.sts_endpoint }}
         with:
           role-to-assume: ${{ secrets[format('{0}_TESTBED_OIDC_ROLE_ARN', matrix.test_bed)] }}
-          aws-region: ${{ vars[format('{0}_TESTBED_AWS_REGION', matrix.test_bed)] }}
+          aws-region: ${{ steps.endpoint_domain.outputs.aws_region }}
 
       - name: Setup Go
         uses: actions/setup-go@v6

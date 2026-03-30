@@ -69,7 +69,7 @@ on:
         default: "[]"
         required: false
         type: string
-      extra_pip_packages:
+      py_test_extra_pip_packages:
         description: "Space-separated extra pip packages to install"
         default: ""
         required: false
@@ -245,8 +245,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install flake8 bandit
 
-          if [[ -n "${{ inputs.extra_pip_packages }}" ]]; then
-            pip install ${{ inputs.extra_pip_packages }}
+          if [[ -n "${{ inputs.py_test_extra_pip_packages }}" ]]; then
+            pip install ${{ inputs.py_test_extra_pip_packages }}
           fi
 
           if [[ -f "${{ inputs.py_source_path }}/pyproject.toml" ]]; then

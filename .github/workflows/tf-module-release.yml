@@ -121,6 +121,7 @@ jobs:
           node-version: '20'
 
       - name: Execute Semantic Release
+        id: semantic
         run: |       
           npm install && \
           npm ci && \
@@ -155,7 +156,7 @@ jobs:
         if: ${{ always() }}
         env:
           TOGGLE_BRANCH_PROTECTION: ${{ fromJSON('[":white_check_mark:", ":x:"]')[inputs.toggle_branch_protection && steps.get_branch_protection.outputs.status == '200'] }}
-          NEW_RELEASE_PUBLISHED: ${{ fromJSON('[":white_check_mark:", ":x:"]')[steps.semantic.outputs.new_release_published != 'true'] }}
+          NEW_RELEASE_PUBLISHED: ${{ fromJSON('[":white_check_mark:", ":x:"]')[steps.semantic.outputs.new_release_published == 'true'] }}
           LAST_RELEASE_VERSION: ${{ steps.semantic.outputs.last_release_version }}
           NEW_RELEASE_VERSION: ${{ steps.semantic.outputs.new_release_version }}
         run: |
