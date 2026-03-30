@@ -287,12 +287,12 @@ jobs:
       tf_lint_allow_failures: ${{ inputs.tf_lint_allow_failures }}
       tf_trivy_version: ${{ inputs.tf_trivy_version }}
       tf_checkov_failures_allow: ${{ inputs.tf_checkov_failures_allow }}
-      terratest_run_tests: ${{ inputs.tf_terratest_run_tests }}
-      test_beds: ${{ inputs.tf_test_beds }}
-      test_bed_aws_terratest_config: ${{ inputs.tf_test_bed_aws_terratest_config }}
-      test_bed_aws_esc_terratest_config: ${{ inputs.tf_test_bed_aws_esc_terratest_config }}
-      terratest_path: ${{ inputs.tf_terratest_path }}
-      terratest_examples_path: ${{ inputs.tf_terratest_examples_path }}
+      tf_terratest_run_tests: ${{ inputs.tf_terratest_run_tests }}
+      tf_test_beds: ${{ inputs.tf_test_beds }}
+      tf_test_bed_aws_terratest_config: ${{ inputs.tf_test_bed_aws_terratest_config }}
+      tf_test_bed_aws_esc_terratest_config: ${{ inputs.tf_test_bed_aws_esc_terratest_config }}
+      tf_terratest_path: ${{ inputs.tf_terratest_path }}
+      tf_terratest_examples_path: ${{ inputs.tf_terratest_examples_path }}
       tf_ai_autofix_include: ${{ inputs.tf_ai_autofix_include }}
       tf_ai_autofix_tflint: ${{ inputs.tf_ai_autofix_tflint }}
       tf_ai_autofix_trivy: ${{ inputs.tf_ai_autofix_trivy }}
