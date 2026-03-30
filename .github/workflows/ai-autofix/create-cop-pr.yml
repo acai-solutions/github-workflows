@@ -1,0 +1,79 @@
+---
+name: Create PR from _cop to feature branch
+on:
+  workflow_call:
+    inputs:
+      runner_type:
+        description: Type of runner (GitHub-hosted or self-hosted)
+        required: false
+        default: ubuntu-latest
+        type: string
+      app_id:
+        description: GitHub App ID secret name
+        required: true
+        type: string
+      app_private_key:
+        description: GitHub App Private Key secret name
+        required: true
+        type: string
+      pr_title:
+        description: Title for the PR
+        required: true
+        type: string
+      pr_body:
+        description: Body for the PR
+        required: true
+        type: string
+      pr_ready_comment:
+        description: Comment to add if PR already exists and checks passed
+        required: true
+        type: string
+
+jobs:
+  create_cop_pr:
+    runs-on: ${{ inputs.runner_type }}
+    steps:
+      - name: Generate GitHub App Token
+        id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets[inputs.app_id] }}
+          private-key: ${{ secrets[inputs.app_private_key] }}
+
+      - name: "Create PR: _cop → feature branch"
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app_token.outputs.token }}
+          script: |
+            const copBranch = context.ref.replace('refs/heads/', '');
+            const featureBranch = copBranch.replace(/_cop$/, '');
+
+            core.info(`_cop: ${copBranch} → feature: ${featureBranch}`);
+
+            const { data: existing } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${copBranch}`,
+              base: featureBranch,
+              state: 'open',
+            });
+
+            if (existing.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing[0].number,
+                body: `${{ inputs.pr_ready_comment }}`,
+              });
+              core.info(`Updated existing PR: ${existing[0].html_url}`);
+            } else {
+              const { data: pr } = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `${{ inputs.pr_title }}`,
+                head: copBranch,
+                base: featureBranch,
+                body: `${{ inputs.pr_body }}`,
+              });
+              core.info(`PR created: ${pr.html_url}`);
+            }
