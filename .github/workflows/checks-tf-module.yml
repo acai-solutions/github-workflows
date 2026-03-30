@@ -97,7 +97,7 @@ on:
         default: "aws/matrix_tf1x5x7_aws5x80x0.json"
         required: false
         type: string
-      test_bed_aws_esc_terratest_config:
+      tf_test_bed_aws_esc_terratest_config:
         description: 'Path to AWS-ESC terratest matrix json config'
         default: "aws/matrix_tf1x14x0_aws6x29x0.json"
         required: false

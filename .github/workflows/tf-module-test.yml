@@ -213,20 +213,20 @@ jobs:
             exit 1
           fi
           
-          echo "Checking for examples directory..."
-          if [ -d "examples" ]; then
-            echo "✅ examples directory exists"
+          echo "Checking for ${{ inputs.tf_terratest_examples_path }} directory..."
+          if [ -d "${{ inputs.tf_terratest_examples_path }}" ]; then
+            echo "✅ ${{ inputs.tf_terratest_examples_path }} directory exists"
           else
-            echo "❌ examples directory not found - creating it"
-            mkdir -p examples/complete
+            echo "❌ ${{ inputs.tf_terratest_examples_path }} directory not found - creating it"
+            mkdir -p "${{ inputs.tf_terratest_examples_path }}/complete"
           fi
           
-          echo "Checking for examples/complete directory..."
-          if [ -d "examples/complete" ]; then
-            echo "✅ examples/complete directory exists"
+          echo "Checking for ${{ inputs.tf_terratest_examples_path }}/complete directory..."
+          if [ -d "${{ inputs.tf_terratest_examples_path }}/complete" ]; then
+            echo "✅ ${{ inputs.tf_terratest_examples_path }}/complete directory exists"
           else
-            echo "❌ examples/complete directory not found - creating it"
-            mkdir -p examples/complete
+            echo "❌ ${{ inputs.tf_terratest_examples_path }}/complete directory not found - creating it"
+            mkdir -p "${{ inputs.tf_terratest_examples_path }}/complete"
           fi
 
       - name: Get Dependencies
