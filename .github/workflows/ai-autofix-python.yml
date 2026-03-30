@@ -613,8 +613,8 @@ jobs:
           git remote set-url origin \
             "https://x-access-token:${GH_APP_TOKEN}@github.com/${{ github.repository }}.git"
           git push origin "HEAD:${AI}"
-          git tag "${TAG}"
-          git push origin "${TAG}"
+          git tag -f "${TAG}"
+          git push origin "${TAG}" --force
           echo "✅ Pushed ${AI} — tagged ${TAG}"
 
       # ── Summary ─────────────────────────────────────────────────────────
