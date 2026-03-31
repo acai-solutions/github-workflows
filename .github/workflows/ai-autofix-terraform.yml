@@ -719,6 +719,7 @@ jobs:
       - name: "🤖 Claude: Fix Terratest failures"
         id: claude_terratest
         if: inputs.tf_ai_autofix_tests && steps.run_terratest.outputs.has_failures == 'true'
+        timeout-minutes: 15
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
@@ -737,8 +738,8 @@ jobs:
                - Go test code issues in test/terratest/ (_test.go files)
                - Missing or incorrect variable/output definitions
                - Resource configuration errors
-            4. Re-run: cd ${{ inputs.tf_terratest_path }} && go test -v -timeout 60m
-            5. Iterate until all tests pass.
+            4. Re-run: cd ${{ inputs.tf_terratest_path }} && go test -v -timeout 10m
+            5. Iterate until all tests pass (max 2 re-runs to avoid long execution).
 
             Common fixes:
             - "Error: Reference to undeclared ..." → add missing variable/local/data block
