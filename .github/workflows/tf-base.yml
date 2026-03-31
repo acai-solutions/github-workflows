@@ -89,10 +89,7 @@ jobs:
 
       - name: Push Format Changes
         if: steps.fmt_commit.outputs.diff == 'true'
-        uses: ad-m/github-push-action@v1
-        with:
-          github_token: ${{ github.token }}
-          branch: ${{ github.event.pull_request.head.ref }}
+        run: git push origin HEAD:${{ github.event.pull_request.head.ref }}
 
   tf_base_terraform_docs:
     needs: tf_base_terraform_format

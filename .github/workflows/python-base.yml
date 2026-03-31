@@ -124,10 +124,7 @@ jobs:
 
       - name: Push Changes
         if: steps.black_commit.outputs.diff == 'true'
-        uses: ad-m/github-push-action@v1.0.0
-        with:
-          github_token: ${{ github.token }}
-          branch: ${{ github.event.pull_request.head.ref || github.ref_name }}
+        run: git push origin HEAD:${{ github.event.pull_request.head.ref || github.ref_name }}
 
   python_isort:
     if: ${{ inputs.py_lint_include }}
@@ -193,10 +190,7 @@ jobs:
 
       - name: Push Changes
         if: steps.isort_commit.outputs.diff == 'true'
-        uses: ad-m/github-push-action@v1.0.0
-        with:
-          github_token: ${{ github.token }}
-          branch: ${{ github.event.pull_request.head.ref || github.ref_name }}
+        run: git push origin HEAD:${{ github.event.pull_request.head.ref || github.ref_name }}
 
   python_flake8:
     if: ${{ inputs.py_lint_include }}
@@ -293,7 +287,7 @@ jobs:
 
       - name: Upload Flake8 Report
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: flake8-report
           path: flake8-report.json
@@ -335,7 +329,7 @@ jobs:
 
       - name: Upload Bandit Report
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: bandit-report
           path: bandit-report.json
