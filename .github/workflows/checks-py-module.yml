@@ -95,7 +95,7 @@ on:
       py_ai_autofix_tests:
         description: "Whether to fix failing tests (Python)"
         required: false
-        default: false
+        default: true
         type: boolean
       py_ai_autofix_max_attempts:
         description: "Maximum number of Python autofix iterations on _cop branch"

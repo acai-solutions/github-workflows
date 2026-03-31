@@ -202,7 +202,7 @@ on:
       tf_ai_autofix_tests:
         description: "Whether to fix Terratest failures (Go test + Terraform examples)"
         required: false
-        default: false
+        default: true
         type: boolean
       tf_ai_autofix_max_attempts:
         description: "Maximum number of Terraform autofix iterations on _cop branch"
