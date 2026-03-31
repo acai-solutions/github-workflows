@@ -1,0 +1,99 @@
+---
+name: Create PR from *_ai to feature branch
+on:
+  workflow_call:
+    inputs:
+      runner_type:
+        description: Type of runner (GitHub-hosted or self-hosted)
+        required: false
+        default: ubuntu-latest
+        type: string
+      app_id:
+        description: GitHub App ID secret name
+        required: true
+        type: string
+      app_private_key:
+        description: GitHub App Private Key secret name
+        required: true
+        type: string
+      pr_title:
+        description: Title for the PR
+        required: true
+        type: string
+      pr_body:
+        description: Body for the PR
+        required: true
+        type: string
+      pr_ready_comment:
+        description: Comment to add if PR already exists and checks passed
+        required: true
+        type: string
+      ai_branch:
+        description: Name of the _ai branch (e.g. feature_ai)
+        required: true
+        type: string
+      feature_branch:
+        description: Name of the feature branch (e.g. feature). If omitted, derived from ai_branch by stripping _ai suffix.
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  create_ai_pr:
+    runs-on: ${{ inputs.runner_type }}
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Generate GitHub App Token
+        id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets[inputs.app_id] }}
+          private-key: ${{ secrets[inputs.app_private_key] }}
+
+      - name: "Create PR: *_ai → feature branch"
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app_token.outputs.token }}
+          script: |
+            const prTitle = process.env.PR_TITLE;
+            const prBody = process.env.PR_BODY;
+            const prReadyComment = process.env.PR_READY_COMMENT;
+            const aiBranch = process.env.AI_BRANCH;
+            const featureBranch = process.env.FEATURE_BRANCH || aiBranch.replace(/_ai$/, '');
+
+            core.info(`_ai: ${aiBranch} → feature: ${featureBranch}`);
+
+            const { data: existing } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${aiBranch}`,
+              base: featureBranch,
+              state: 'open',
+            });
+
+            if (existing.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing[0].number,
+                body: prReadyComment,
+              });
+              core.info(`Updated existing PR: ${existing[0].html_url}`);
+            } else {
+              const { data: pr } = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: prTitle,
+                head: aiBranch,
+                base: featureBranch,
+                body: prBody,
+              });
+              core.info(`PR created: ${pr.html_url}`);
+            }
+        env:
+          PR_TITLE: ${{ inputs.pr_title }}
+          PR_BODY: ${{ inputs.pr_body }}
+          PR_READY_COMMENT: ${{ inputs.pr_ready_comment }}
+          AI_BRANCH: ${{ inputs.ai_branch }}
+          FEATURE_BRANCH: ${{ inputs.feature_branch }}

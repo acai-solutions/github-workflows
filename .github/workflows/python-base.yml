@@ -23,7 +23,6 @@ on:
         default: "noreply@github.com"
         required: false
         type: string
-      # GitHub Workflow config repo details
       gh_wf_config_repo:
         description: "Public repo where Python linting config is stored"
         default: "acai-solutions/github-workflow-configs"
@@ -34,33 +33,31 @@ on:
         default: "main"
         required: false
         type: string
-        
-      linting_include:
-        description: "Whether to include Python or TFLint code quality checks"
+      py_version:
+        description: "Python version"
+        default: "3.11"
+        required: false
+        type: string
+      py_lint_config_path:
+        description: 'Path to python config in python_config_repo (e.g. "python")'
+        default: "python"
+        required: false
+        type: string
+      py_lint_include:
+        description: "Whether to include Python code quality checks"
         required: false
         default: true
         type: boolean
-      linting_allow_failures:
+      py_lint_allow_failures:
         description: "Whether to allow Python linting failures to pass the pipeline"
         required: false
         default: false
         type: boolean
 
-      python_version:
-        description: "Python version"
-        default: "3.11"
-        required: false
-        type: string
-      python_config_path:
-        description: 'Path to python config in python_config_repo (e.g. "python")'
-        default: "python"
-        required: false
-        type: string
-
     outputs:
       all_steps_passed:
         description: "Indicates if all pipeline steps passed successfully"
-        value: ${{ jobs.python_black.outputs.black_status == 'success' && jobs.python_isort.outputs.isort_status == 'success' && (inputs.linting_allow_failures || jobs.python_flake8.outputs.flake8_status == 'success') && jobs.python_bandit.outputs.bandit_status == 'success' }}
+        value: ${{ jobs.python_black.outputs.black_status == 'success' && jobs.python_isort.outputs.isort_status == 'success' && (inputs.py_lint_allow_failures || jobs.python_flake8.outputs.flake8_status == 'success') && jobs.python_bandit.outputs.bandit_status == 'success' }}
 
 # Add defaults so all `run:` steps use bash
 defaults:
@@ -69,7 +66,7 @@ defaults:
 
 jobs:
   python_black:
-    if: ${{ inputs.linting_include }}
+    if: ${{ inputs.py_lint_include }}
     runs-on: ${{ inputs.runner_type }}
     outputs:
       black_status: ${{ steps.black_commit.outputs.diff == 'false' && 'success' || 'failure' }}
@@ -85,7 +82,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ inputs.python_version }}
+          python-version: ${{ inputs.py_version }}
 
       - name: Install Black
         run: pip install black
@@ -133,7 +130,7 @@ jobs:
           branch: ${{ github.event.pull_request.head.ref || github.ref_name }}
 
   python_isort:
-    if: ${{ inputs.linting_include }}
+    if: ${{ inputs.py_lint_include }}
     needs: python_black
     runs-on: ${{ inputs.runner_type }}
     outputs:
@@ -154,7 +151,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ inputs.python_version }}
+          python-version: ${{ inputs.py_version }}
 
       - name: Install isort
         run: pip install isort
@@ -202,7 +199,7 @@ jobs:
           branch: ${{ github.event.pull_request.head.ref || github.ref_name }}
 
   python_flake8:
-    if: ${{ inputs.linting_include }}
+    if: ${{ inputs.py_lint_include }}
     needs: [python_black, python_isort]
     runs-on: ${{ inputs.runner_type }}
     outputs:
@@ -223,7 +220,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ inputs.python_version }}
+          python-version: ${{ inputs.py_version }}
 
       - name: Install Flake8
         run: pip install flake8 flake8-json
@@ -240,11 +237,11 @@ jobs:
             exit 0
           fi
 
-          echo "Fetching Flake8 config from: ${{ inputs.gh_wf_config_repo }}/${{ inputs.python_config_path }}/.flake8@${{ inputs.gh_wf_config_repo_ref }}"
+          echo "Fetching Flake8 config from: ${{ inputs.gh_wf_config_repo }}/${{ inputs.py_lint_config_path }}/.flake8@${{ inputs.gh_wf_config_repo_ref }}"
 
           # Try to download the central config file only if no local config was found
           HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.python_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
+            "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.py_lint_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
 
           HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n 1)
           CONTENT=$(echo "$HTTP_RESPONSE" | head -n -1)
@@ -256,7 +253,7 @@ jobs:
             echo "Content preview:"
             head -20 .flake8
           elif [[ "$HTTP_CODE" == "404" ]]; then
-            echo "⚠️ Flake8 config not found in central repo at ${{ inputs.python_config_path }}/.flake8"
+            echo "⚠️ Flake8 config not found in central repo at ${{ inputs.py_lint_config_path }}/.flake8"
             echo "config_source=none" >> $GITHUB_OUTPUT
           else
             echo "❌ Failed to download Flake8 config. HTTP Status: $HTTP_CODE"
@@ -266,7 +263,7 @@ jobs:
 
       - name: Run Flake8
         id: flake8
-        continue-on-error: ${{ inputs.linting_allow_failures }}
+        continue-on-error: ${{ inputs.py_lint_allow_failures }}
         run: |
           echo "Running Flake8 linting checks..."
           echo "Config source: ${{ steps.get_config.outputs.config_source }}"
@@ -287,8 +284,8 @@ jobs:
             exit 0
           else
             echo "❌ Flake8 found issues"
-            if [[ "${{ inputs.linting_allow_failures }}" == "true" ]]; then
-              echo "⚠️ Continuing despite errors (linting_allow_failures=true)"
+            if [[ "${{ inputs.py_lint_allow_failures }}" == "true" ]]; then
+              echo "⚠️ Continuing despite errors (py_lint_allow_failures=true)"
             fi
             # Exit with error code to fail the step
             exit 1
@@ -296,13 +293,13 @@ jobs:
 
       - name: Upload Flake8 Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: flake8-report
           path: flake8-report.json
 
   python_bandit:
-    if: ${{ inputs.linting_include }}
+    if: ${{ inputs.py_lint_include }}
     needs: [python_black, python_isort]
     runs-on: ${{ inputs.runner_type }}
     outputs:
@@ -323,7 +320,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ inputs.python_version }}
+          python-version: ${{ inputs.py_version }}
 
       - name: Install Bandit
         run: pip install bandit
@@ -338,7 +335,7 @@ jobs:
 
       - name: Upload Bandit Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: bandit-report
           path: bandit-report.json
@@ -349,23 +346,23 @@ jobs:
     if: always()
     steps:
       - name: Output Summary (checks disabled)
-        if: ${{ inputs.linting_include != true }}
+        if: ${{ inputs.py_lint_include != true }}
         run: |
           echo '# 🐍 Python Module Base Pipeline' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
-          echo '> ⏭️ Linting and security checks are disabled (linting_include: false).' >> $GITHUB_STEP_SUMMARY
+          echo '> ⏭️ Linting and security checks are disabled (py_lint_include: false).' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '**🎉 Overall Result: ✅ All checks passed (nothing to run)**' >> $GITHUB_STEP_SUMMARY
 
       - name: Output Summary
-        if: ${{ inputs.linting_include == true }}
+        if: ${{ inputs.py_lint_include == true }}
         run: |
           echo '# 🐍 Python Module Base Pipeline' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           
           # Add warning banner if flake8 failed but is allowed to continue
-          if [[ "${{ needs.python_flake8.outputs.flake8_status }}" != "success" ]] && [[ "${{ inputs.linting_allow_failures }}" == "true" ]]; then
-            echo '> ⚠️ **Warning:** Flake8 found linting issues but the pipeline is configured to continue (`linting_allow_failures: true`)' >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ needs.python_flake8.outputs.flake8_status }}" != "success" ]] && [[ "${{ inputs.py_lint_allow_failures }}" == "true" ]]; then
+            echo '> ⚠️ **Warning:** Flake8 found linting issues but the pipeline is configured to continue (`py_lint_allow_failures: true`)' >> $GITHUB_STEP_SUMMARY
             echo '' >> $GITHUB_STEP_SUMMARY
           fi
           
@@ -378,7 +375,7 @@ jobs:
           # Properly handle Flake8 status
           if [[ "${{ needs.python_flake8.outputs.flake8_status }}" == "success" ]]; then
             echo "| 🔍 Linting (Flake8) | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ inputs.linting_allow_failures }}" == "true" ]]; then
+          elif [[ "${{ inputs.py_lint_allow_failures }}" == "true" ]]; then
             echo "| 🔍 Linting (Flake8) | ⚠️ Issues found (allowed to fail) |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| 🔍 Linting (Flake8) | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
@@ -400,7 +397,7 @@ jobs:
             OVERALL_STATUS="false"
           fi
           
-          if [[ "${{ needs.python_flake8.outputs.flake8_status }}" != "success" ]] && [[ "${{ inputs.linting_allow_failures }}" != "true" ]]; then
+          if [[ "${{ needs.python_flake8.outputs.flake8_status }}" != "success" ]] && [[ "${{ inputs.py_lint_allow_failures }}" != "true" ]]; then
             OVERALL_STATUS="false"
           fi
           
@@ -415,7 +412,7 @@ jobs:
           fi
 
       - name: Create PR Comment for Warnings
-        if: inputs.linting_include == true && needs.python_flake8.outputs.flake8_status != 'success' && inputs.linting_allow_failures == true && github.event_name == 'pull_request'
+        if: inputs.py_lint_include == true && needs.python_flake8.outputs.flake8_status != 'success' && inputs.py_lint_allow_failures == true && github.event_name == 'pull_request'
         uses: actions/github-script@v8
         with:
           script: |

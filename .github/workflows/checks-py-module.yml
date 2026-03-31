@@ -33,34 +33,92 @@ on:
         default: main
         required: false
         type: string
-      linting_include:
-        description: Whether to include Python code quality checks
-        required: false
-        default: true
-        type: boolean
-      linting_allow_failures:
-        description: Whether to allow Python linting failures to pass the pipeline
-        required: false
-        default: false
-        type: boolean
-      python_version:
+      py_version:
         description: Python version
         default: "3.11"
         required: false
         type: string
-      python_lint_config_path:
+      py_source_path:
+        description: Relative path from repo root to the Python package root (where pyproject.toml lives)
+        default: shared/python
+        required: false
+        type: string
+      py_lint_include:
+        description: Whether to include Python code quality checks
+        required: false
+        default: true
+        type: boolean
+      py_lint_allow_failures:
+        description: Whether to allow Python linting failures to pass the pipeline
+        required: false
+        default: false
+        type: boolean
+      py_lint_config_path:
         description: Path to python config in gh_wf_config_repo (e.g. "python")
         default: python
         required: false
         type: string
-        
+      py_testing_include:
+        description: Whether to include pytest module tests
+        required: false
+        default: false
+        type: boolean
+      py_test_modules:
+        description: >
+          JSON array of module names whose _test/ folders should be exercised.
+          Example: '["logging","storage","xml_parser"]'
+        default: "[]"
+        required: false
+        type: string
+      py_test_extra_pip_packages:
+        description: Space-separated pip packages to install for tests
+        default: ""
+        required: false
+        type: string
+
+      # ── AI Autofix (optional) ───────────────────────────────────────────
+      py_ai_autofix_include:
+        description: "Whether to run Python AI autofix on _cop branch when checks fail"
+        required: false
+        default: false
+        type: boolean
+      py_ai_autofix_flake8:
+        description: "Whether to fix flake8 findings (Python)"
+        required: false
+        default: true
+        type: boolean
+      py_ai_autofix_bandit:
+        description: "Whether to fix bandit findings (Python)"
+        required: false
+        default: true
+        type: boolean
+      py_ai_autofix_tests:
+        description: "Whether to fix failing tests (Python)"
+        required: false
+        default: true
+        type: boolean
+      py_ai_autofix_max_attempts:
+        description: "Maximum number of Python autofix iterations on _cop branch"
+        required: false
+        default: 3
+        type: number
+
     outputs:
       all_steps_passed:
         description: Indicates if all pipeline steps passed successfully
-        value: ${{ jobs.python_base.outputs.all_steps_passed }}
+        value: ${{ jobs.py_module_checks_summary.outputs.all_passed }}
       python_base_status:
         description: Python base pipeline status
         value: ${{ jobs.python_base.outputs.all_steps_passed }}
+      python_tests_status:
+        description: Python tests pipeline status
+        value: ${{ jobs.python_tests.outputs.all_tests_passed }}
+      autofix_applied:
+        description: Whether AI autofix was applied
+        value: ${{ jobs.python_ai_autofix.outputs.fixes_applied }}
+      ai_branch:
+        description: Name of the _cop branch used for fixes
+        value: ${{ jobs.python_ai_autofix.outputs.ai_branch }}
 
 concurrency:
   group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
@@ -71,9 +129,10 @@ defaults:
     shell: bash
 
 jobs:
+  # ── Quality checks (Black, isort, Flake8, Bandit) ───────────────────
   python_base:
     if: ${{ always() }}
-    uses: acai-solutions/github-workflows/.github/workflows/python-base.yml@main
+    uses: ./.github/workflows/python-base.yml
     with:
       concurrency_group: ${{ inputs.concurrency_group }}
       runner_type: ${{ inputs.runner_type }}
@@ -81,43 +140,86 @@ jobs:
       commit_email: ${{ inputs.commit_email }}
       gh_wf_config_repo: ${{ inputs.gh_wf_config_repo }}
       gh_wf_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
-      linting_include: ${{ inputs.linting_include }}
-      linting_allow_failures: ${{ inputs.linting_allow_failures }}
-      python_version: ${{ inputs.python_version }}
-      python_config_path: ${{ inputs.python_lint_config_path }}
+      py_lint_include: ${{ inputs.py_lint_include }}
+      py_lint_allow_failures: ${{ inputs.py_lint_allow_failures }}
+      py_version: ${{ inputs.py_version }}
+      py_lint_config_path: ${{ inputs.py_lint_config_path }}
     secrets: inherit
 
+  # ── Pytest per module ───────────────────────────────────────────────
+  python_tests:
+    if: ${{ inputs.py_testing_include && inputs.py_test_modules != '[]' }}
+    uses: ./.github/workflows/python-test.yml
+    with:
+      runner_type: ${{ inputs.runner_type }}
+      py_version: ${{ inputs.py_version }}
+      py_source_path: ${{ inputs.py_source_path }}
+      py_test_modules: ${{ inputs.py_test_modules }}
+      py_test_extra_pip_packages: ${{ inputs.py_test_extra_pip_packages }}
+    secrets: inherit
+
+  # ── AI Autofix on _cop branch (only when checks fail) ───────────────
+  python_ai_autofix:
+    needs:
+      - python_base
+      - python_tests
+    if: |
+      always() &&
+      inputs.py_ai_autofix_include &&
+      (needs.python_base.outputs.all_steps_passed != 'true' ||
+       needs.python_tests.outputs.all_tests_passed != 'true') &&
+      !(needs.python_base.result == 'skipped' &&
+        needs.python_tests.result == 'skipped')
+    uses: ./.github/workflows/ai-autofix-python.yml
+    with:
+      runner_type: ${{ inputs.runner_type }}
+      gh_wf_config_repo: ${{ inputs.gh_wf_config_repo }}
+      gh_wf_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
+      commit_user: ${{ inputs.commit_user }}
+      commit_email: ${{ inputs.commit_email }}
+      py_version: ${{ inputs.py_version }}
+      py_source_path: ${{ inputs.py_source_path }}
+      py_lint_config_path: ${{ inputs.py_lint_config_path }}
+      py_test_modules: ${{ inputs.py_test_modules }}
+      py_test_extra_pip_packages: ${{ inputs.py_test_extra_pip_packages }}
+      py_ai_autofix_flake8: ${{ inputs.py_ai_autofix_flake8 }}
+      py_ai_autofix_bandit: ${{ inputs.py_ai_autofix_bandit }}
+      py_ai_autofix_tests: ${{ inputs.py_ai_autofix_tests }}
+      py_ai_autofix_max_attempts: ${{ inputs.py_ai_autofix_max_attempts }}
+    secrets: inherit
+
+  # ── Summary gate ────────────────────────────────────────────────────
   py_module_checks_summary:
     needs:
       - python_base
+      - python_tests
+      - python_ai_autofix
     runs-on: ${{ inputs.runner_type }}
     if: always()
+    outputs:
+      all_passed: ${{ steps.status.outputs.all_passed }}
     steps:
-      - name: Generate Overall Summary
+      - name: Summary
         run: |
-          echo '# 📊 Python Module Checks - Overall Summary' >> $GITHUB_STEP_SUMMARY
+          echo '# 📊 Python Module Checks' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
-          echo '## Pipeline Results' >> $GITHUB_STEP_SUMMARY
           echo '| Component | Status |' >> $GITHUB_STEP_SUMMARY
           echo '|-----------|--------|' >> $GITHUB_STEP_SUMMARY
-          echo "| 🐍 Python Base (Quality & Tests) | ${{ needs.python_base.outputs.all_steps_passed == 'true' && '✅ Passed' || needs.python_base.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
+          echo "| 🐍 Quality (Black/isort/Flake8/Bandit) | ${{ needs.python_base.outputs.all_steps_passed == 'true' && '✅' || needs.python_base.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧪 Tests | ${{ needs.python_tests.outputs.all_tests_passed == 'true' && '✅' || needs.python_tests.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🤖 AI Autofix | ${{ needs.python_ai_autofix.outputs.fixes_applied == 'true' && '✅ Applied' || needs.python_ai_autofix.result == 'skipped' && '⏭️' || '—' }} |" >> $GITHUB_STEP_SUMMARY
 
-          PY_BASE_PASSED="${{ needs.python_base.outputs.all_steps_passed == 'true' }}"
-          if [[ "$PY_BASE_PASSED" == "true" ]]; then
-            echo "**🎉 Overall Result: ✅ All checks passed successfully!**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**⚠️ Overall Result: ❌ Some checks failed. Please review the detailed results above.**" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Failed Components:" >> $GITHUB_STEP_SUMMARY
-            echo "- Python Base (Quality & Tests)" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Check Overall Status
+      - name: Gate
+        id: status
         if: always()
         run: |
-          PY_BASE_PASSED="${{ needs.python_base.outputs.all_steps_passed == 'true' }}"
-          if [[ "$PY_BASE_PASSED" != "true" ]]; then
-            echo "::error::Some checks failed. See summary above for details."
+          BASE="${{ needs.python_base.outputs.all_steps_passed == 'true' || needs.python_base.result == 'skipped' }}"
+          TESTS="${{ needs.python_tests.outputs.all_tests_passed == 'true' || needs.python_tests.result == 'skipped' }}"
+
+          if [[ "$BASE" == "true" && "$TESTS" == "true" ]]; then
+            echo "all_passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "all_passed=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Some checks failed."
             exit 1
           fi

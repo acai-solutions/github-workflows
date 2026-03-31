@@ -3,6 +3,7 @@ name: Python + Terraform Module Checks
 on:
   workflow_call:
     inputs:
+      # ── Shared ────────────────────────────────────────────────────────────
       concurrency_group:
         description: Name of concurrency group to manage concurrent GitHub Action runs
         default: ${{ github.repository }}/${{ github.head_ref || github.ref_name }}
@@ -23,8 +24,6 @@ on:
         default: noreply@github.com
         required: false
         type: string
-
-      # GitHub Workflow Config Repo  
       gh_wf_config_repo:
         description: Public repo where GitHub workflow config is stored
         default: acai-solutions/github-workflow-configs
@@ -36,29 +35,51 @@ on:
         required: false
         type: string
 
-      # Python inputs
-      linting_include:
-        description: Whether to include linting/code quality checks
-        required: false
-        default: true
-        type: boolean
-      linting_allow_failures:
-        description: Whether to allow linting failures to pass the pipeline
-        required: false
-        default: false
-        type: boolean
-      python_version:
+      # ── Python ────────────────────────────────────────────────────────────
+      py_version:
         description: Python version
         default: "3.11"
         required: false
         type: string
-      python_lint_config_path:
+      py_source_path:
+        description: "Relative path from repo root to the Python package root"
+        default: "."
+        required: false
+        type: string
+      py_lint_include:
+        description: Whether to include linting/code quality checks
+        required: false
+        default: true
+        type: boolean
+      py_lint_allow_failures:
+        description: Whether to allow linting failures to pass the pipeline
+        required: false
+        default: false
+        type: boolean
+      py_lint_config_path:
         description: Path to python config in gh_wf_config_repo (e.g. "python")
         default: python
         required: false
         type: string
+      py_testing_include:
+        description: Whether to include pytest module tests
+        required: false
+        default: false
+        type: boolean
+      py_test_modules:
+        description: >
+          JSON array of module names whose _test/ folders should be exercised.
+          Example: '["logging","storage","xml_parser"]'
+        default: "[]"
+        required: false
+        type: string
+      py_test_extra_pip_packages:
+        description: "Space-separated pip packages to install for autofix"
+        default: ""
+        required: false
+        type: string
 
-      # Terraform inputs
+      # ── Terraform ─────────────────────────────────────────────────────────
       tf_version:
         description: Terraform version used for formatting and docs
         default: latest
@@ -69,16 +90,26 @@ on:
         required: false
         default: false
         type: boolean
+      tf_lint_include:
+        description: Whether to include TFLint code quality checks
+        required: false
+        default: true
+        type: boolean
       tf_lint_config_path:
         description: Path to tflint config in gh_wf_config_repo (e.g. "aws/.tflint.hcl")
         default: .tflint.hcl
         required: false
         type: string
       tf_lint_version:
-        description: TFLint version to use
+        description: Tflint version to use
         default: latest
         required: false
         type: string
+      tf_lint_allow_failures:
+        description: Whether to allow TFLint failures to pass the pipeline
+        required: false
+        default: false
+        type: boolean
       tf_trivy_version:
         description: Trivy version to use
         default: latest
@@ -89,39 +120,97 @@ on:
         required: false
         default: false
         type: boolean
-
-      # Test inputs
-      terratest_run_tests:
+      tf_terratest_run_tests:
         description: Whether to run Terraform (Terratest) tests
         required: false
         default: true
         type: boolean
-      test_beds:
+      tf_test_beds:
         description: "List of test beds to run tests against (JSON array of cloud provider prefixes, e.g. [\"AWS\"])"
         required: false
         default: '["AWS"]'
         type: string
-      test_bed_aws_terratest_config:
+      tf_test_bed_aws_terratest_config:
         description: 'Path to AWS terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws/matrix.json")'
         default: "aws/matrix_tf1x5x7_aws5x80x0.json"
         required: false
         type: string
-      test_bed_aws_esc_terratest_config:
+      tf_test_bed_aws_esc_terratest_config:
         description: 'Path to AWS-ESC terratest matrix json config in terratest_config_repo/terraform/terratest/ (e.g. "aws-esc/matrix.json")'
         default: "aws/matrix_tf1x14x0_aws6x29x0.json"
         required: false
         type: string
-      terratest_path:
+      tf_terratest_path:
         description: "Path to terratest directory"
         default: "test/terratest"
         required: false
         type: string
-      terratest_examples_path:
+      tf_terratest_examples_path:
         description: "Path to terratest examples directory"
         default: "examples"
         required: false
         type: string
-        
+
+              # ── Python AI Autofix (optional) ───────────────────────────────
+      py_ai_autofix_include:
+        description: "Whether to run Python AI autofix on _cop branch when checks fail"
+        required: false
+        default: false
+        type: boolean
+      py_ai_autofix_flake8:
+        description: "Whether to fix flake8 findings (Python)"
+        required: false
+        default: true
+        type: boolean
+      py_ai_autofix_bandit:
+        description: "Whether to fix bandit findings (Python)"
+        required: false
+        default: true
+        type: boolean
+      py_ai_autofix_tests:
+        description: "Whether to fix failing tests (Python)"
+        required: false
+        default: false
+        type: boolean
+      py_ai_autofix_max_attempts:
+        description: "Maximum number of Python autofix iterations on _cop branch"
+        required: false
+        default: 3
+        type: number
+
+      # ── Terraform AI Autofix (optional) ───────────────────────────
+      tf_ai_autofix_include:
+        description: "Whether to run Terraform AI autofix on _cop branch when checks fail"
+        required: false
+        default: false
+        type: boolean
+      tf_ai_autofix_tflint:
+        description: "Whether to fix TFLint findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_trivy:
+        description: "Whether to fix Trivy findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_checkov:
+        description: "Whether to fix Checkov findings (Terraform)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_tests:
+        description: "Whether to fix Terratest failures (Go test + Terraform examples)"
+        required: false
+        default: true
+        type: boolean
+      tf_ai_autofix_max_attempts:
+        description: "Maximum number of Terraform autofix iterations on _cop branch"
+        required: false
+        default: 3
+        type: number
+
+
     outputs:
       all_checks_passed:
         description: True if both Python and Terraform checks passed
@@ -139,9 +228,18 @@ on:
       terraform_security_status:
         description: Terraform security checks status
         value: ${{ jobs.terraform_checks.outputs.security_status }}
-      terraform_test_status:
-        description: Terraform tests status
-        value: ${{ jobs.terraform_checks.outputs.security_test_status }}
+      python_autofix_applied:
+        description: Whether Python AI autofix was applied
+        value: ${{ jobs.python_checks.outputs.autofix_applied }}
+      python_ai_branch:
+        description: Name of the _cop branch used for Python fixes
+        value: ${{ jobs.python_checks.outputs.ai_branch }}
+      tf_autofix_applied:
+        description: Whether Terraform AI autofix was applied
+        value: ${{ jobs.terraform_checks.outputs.autofix_applied }}
+      tf_ai_branch:
+        description: Name of the _cop branch used for Terraform fixes
+        value: ${{ jobs.terraform_checks.outputs.ai_branch }}
 
 concurrency:
   group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
@@ -158,10 +256,20 @@ jobs:
       commit_email: ${{ inputs.commit_email }}
       gh_wf_config_repo: ${{ inputs.gh_wf_config_repo }}
       gh_wf_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
-      linting_include: ${{ inputs.linting_include }}
-      linting_allow_failures: ${{ inputs.linting_allow_failures }}
-      python_version: ${{ inputs.python_version }}
-      python_lint_config_path: ${{ inputs.python_lint_config_path }}
+      py_version: ${{ inputs.py_version }}
+      py_source_path: ${{ inputs.py_source_path }}
+      py_lint_include: ${{ inputs.py_lint_include }}
+      py_lint_allow_failures: ${{ inputs.py_lint_allow_failures }}
+      py_lint_config_path: ${{ inputs.py_lint_config_path }}
+      py_testing_include: ${{ inputs.py_testing_include }}
+      py_test_modules: ${{ inputs.py_test_modules }}
+      py_test_extra_pip_packages: ${{ inputs.py_test_extra_pip_packages }}
+      py_ai_autofix_include: ${{ inputs.py_ai_autofix_include }}
+      py_ai_autofix_flake8: ${{ inputs.py_ai_autofix_flake8 }}
+      py_ai_autofix_bandit: ${{ inputs.py_ai_autofix_bandit }}
+      py_ai_autofix_tests: ${{ inputs.py_ai_autofix_tests }}
+      py_ai_autofix_max_attempts: ${{ inputs.py_ai_autofix_max_attempts }}
+    secrets: inherit
 
   # 2) Then run Terraform checks (only if Python passed)
   terraform_checks:
@@ -176,21 +284,26 @@ jobs:
       commit_email: ${{ inputs.commit_email }}
       gh_wf_config_repo: ${{ inputs.gh_wf_config_repo }}
       gh_wf_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
-      linting_include: ${{ inputs.linting_include }}
-      linting_allow_failures: ${{ inputs.linting_allow_failures }}
-      python_version: ${{ inputs.python_version }}
       tf_version: ${{ inputs.tf_version }}
       tf_docs_skip: ${{ inputs.tf_docs_skip }}
+      tf_lint_include: ${{ inputs.tf_lint_include }}
       tf_lint_config_path: ${{ inputs.tf_lint_config_path }}
       tf_lint_version: ${{ inputs.tf_lint_version }}
+      tf_lint_allow_failures: ${{ inputs.tf_lint_allow_failures }}
       tf_trivy_version: ${{ inputs.tf_trivy_version }}
       tf_checkov_failures_allow: ${{ inputs.tf_checkov_failures_allow }}
-      terratest_run_tests: ${{ inputs.terratest_run_tests }}
-      test_beds: ${{ inputs.test_beds }}
-      test_bed_aws_terratest_config: ${{ inputs.test_bed_aws_terratest_config }}
-      test_bed_aws_esc_terratest_config: ${{ inputs.test_bed_aws_esc_terratest_config }}
-      terratest_path: ${{ inputs.terratest_path }}
-      terratest_examples_path: ${{ inputs.terratest_examples_path }}
+      tf_terratest_run_tests: ${{ inputs.tf_terratest_run_tests }}
+      tf_terratest_path: ${{ inputs.tf_terratest_path }}
+      tf_terratest_examples_path: ${{ inputs.tf_terratest_examples_path }}
+      tf_test_beds: ${{ inputs.tf_test_beds }}
+      tf_test_bed_aws_terratest_config: ${{ inputs.tf_test_bed_aws_terratest_config }}
+      tf_test_bed_aws_esc_terratest_config: ${{ inputs.tf_test_bed_aws_esc_terratest_config }}
+      tf_ai_autofix_include: ${{ inputs.tf_ai_autofix_include }}
+      tf_ai_autofix_tflint: ${{ inputs.tf_ai_autofix_tflint }}
+      tf_ai_autofix_trivy: ${{ inputs.tf_ai_autofix_trivy }}
+      tf_ai_autofix_checkov: ${{ inputs.tf_ai_autofix_checkov }}
+      tf_ai_autofix_tests: ${{ inputs.tf_ai_autofix_tests }}
+      tf_ai_autofix_max_attempts: ${{ inputs.tf_ai_autofix_max_attempts }}
     secrets: inherit
 
   tf_py_checks_summary:

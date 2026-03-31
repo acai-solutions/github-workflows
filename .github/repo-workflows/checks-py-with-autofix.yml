@@ -1,0 +1,48 @@
+name: Python Module Checks with Copilot Autofix
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Example caller workflow that chains:
+#   1. Standard Python checks (black, isort, flake8, bandit, tests)
+#   2. If checks fail → Copilot Autofix attempts to fix findings
+#   3. Push triggers re-run of this workflow automatically
+#
+# Usage: Copy this file to your repo's .github/workflows/ directory
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "**.py"
+      - "pyproject.toml"
+      - "requirements*.txt"
+
+concurrency:
+  group: ${{ github.repository }}/${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Step 1: Run standard checks ────────────────────────────────────────
+  python_checks:
+    uses: acai-solutions/github-workflows/.github/workflows/checks-py-module.yml@main
+    with:
+      linting_include: true
+      linting_allow_failures: true   # Don't block — let autofix handle it
+      testing_include: true
+      python_source_path: shared/python
+      test_modules: '["logging","storage"]'
+    secrets: inherit
+
+  # ── Step 2: Auto-fix if checks failed ──────────────────────────────────
+  copilot_autofix:
+    needs: python_checks
+    if: |
+      always() && 
+      needs.python_checks.outputs.all_steps_passed != 'true'
+    uses: acai-solutions/github-workflows/.github/workflows/python-copilot-autofix.yml@main
+    with:
+      python_source_path: shared/python
+      copilot_fix_flake8: true
+      copilot_fix_tests: false       # Set to true only if you trust AI test fixes
+      max_copilot_attempts: 1
+    secrets: inherit
