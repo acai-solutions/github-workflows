@@ -52,7 +52,7 @@ jobs:
           private-key: ${{ secrets[inputs.app_private_key] }}
 
       - name: "Create PR: *_ai → feature branch"
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ steps.app_token.outputs.token }}
           script: |
