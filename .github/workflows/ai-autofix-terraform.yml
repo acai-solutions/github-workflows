@@ -257,7 +257,7 @@ jobs:
       - name: Download security findings
         id: dl_security
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: autofix-security-findings
           path: /tmp/autofix-findings
@@ -266,7 +266,7 @@ jobs:
         if: inputs.tf_ai_autofix_tests
         id: dl_terratest
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: autofix-terratest-*
           merge-multiple: true
