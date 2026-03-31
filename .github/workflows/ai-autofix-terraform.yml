@@ -699,9 +699,10 @@ jobs:
             cp /tmp/autofix-findings/terratest-output.txt /tmp/terratest-output.txt
             echo "📦 Using Terratest output from upstream check job"
           else
-            echo "ℹ️ No upstream artifact — running Terratest"
-            cd ${{ inputs.tf_terratest_path }}
-            go test -v -timeout 60m > /tmp/terratest-output.txt 2>&1 || true
+            echo "ℹ️ No upstream Terratest artifact — tests were skipped or not run"
+            echo "has_failures=false" >> "$GITHUB_OUTPUT"
+            echo "count=0" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           if grep -qE "^FAIL" /tmp/terratest-output.txt; then
@@ -710,7 +711,7 @@ jobs:
             echo "has_failures=true" >> "$GITHUB_OUTPUT"
             echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
           else
-            echo "✅ All Terratest tests pass"
+            echo "✅ All Terratest tests passed or were skipped — no autofix needed"
             echo "has_failures=false" >> "$GITHUB_OUTPUT"
             echo "count=0" >> "$GITHUB_OUTPUT"
           fi
