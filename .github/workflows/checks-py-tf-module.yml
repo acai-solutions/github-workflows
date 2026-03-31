@@ -199,6 +199,11 @@ on:
         required: false
         default: true
         type: boolean
+      tf_ai_autofix_tests:
+        description: "Whether to fix Terratest failures (Go test + Terraform examples)"
+        required: false
+        default: false
+        type: boolean
       tf_ai_autofix_max_attempts:
         description: "Maximum number of Terraform autofix iterations on _cop branch"
         required: false
@@ -297,6 +302,7 @@ jobs:
       tf_ai_autofix_tflint: ${{ inputs.tf_ai_autofix_tflint }}
       tf_ai_autofix_trivy: ${{ inputs.tf_ai_autofix_trivy }}
       tf_ai_autofix_checkov: ${{ inputs.tf_ai_autofix_checkov }}
+      tf_ai_autofix_tests: ${{ inputs.tf_ai_autofix_tests }}
       tf_ai_autofix_max_attempts: ${{ inputs.tf_ai_autofix_max_attempts }}
     secrets: inherit
 
