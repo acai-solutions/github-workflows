@@ -263,34 +263,45 @@ jobs:
 
       - name: Fetch flake8 config
         if: inputs.py_ai_autofix_flake8
+        id: get_flake8_config
         run: |
-          SRC="${{ inputs.py_source_path }}"
-
           if [[ -f ".flake8" ]]; then
             echo "✅ Using local .flake8"
-          else
-            RESP=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.py_lint_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
-            CODE=$(echo "$RESP" | tail -n 1)
-            BODY=$(echo "$RESP" | head -n -1)
-            if [[ "$CODE" == "200" ]]; then
-              echo "$BODY" > .flake8
-              echo "✅ Downloaded .flake8"
-            else
-              echo "⚠️ No .flake8 available (HTTP $CODE)"
-            fi
+            echo "config_source=local" >> "$GITHUB_OUTPUT"
+            head -20 .flake8 || true
+            exit 0
           fi
 
-          if [[ -f ".flake8" && "${SRC}" != "." ]]; then
-            cp .flake8 "${SRC}/.flake8"
+          echo "Fetching .flake8 from: ${{ inputs.gh_wf_config_repo }}/${{ inputs.py_lint_config_path }}/.flake8@${{ inputs.gh_wf_config_repo_ref }}"
+
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github.v3.raw" \
+            "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.py_lint_config_path }}/.flake8?ref=${{ inputs.gh_wf_config_repo_ref }}")
+
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n 1)
+          CONTENT=$(echo "$HTTP_RESPONSE" | head -n -1)
+
+          if [[ "$HTTP_CODE" == "200" ]]; then
+            echo "$CONTENT" > .flake8
+            echo "✅ Downloaded .flake8 from central repo"
+            echo "config_source=remote" >> "$GITHUB_OUTPUT"
+            head -20 .flake8
+          elif [[ "$HTTP_CODE" == "404" ]]; then
+            echo "⚠️ .flake8 not found in central repo at ${{ inputs.py_lint_config_path }}/.flake8"
+            echo "config_source=none" >> "$GITHUB_OUTPUT"
+          else
+            echo "❌ Failed to download .flake8 (HTTP $HTTP_CODE)"
+            echo "config_source=none" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run flake8
         if: inputs.py_ai_autofix_flake8
         id: run_flake8
         run: |
-          cd "${{ inputs.py_source_path }}"
-          flake8 . --format=default > /tmp/flake8-findings.txt 2>&1 || true
+          CFG_OPT=""
+          if [[ "${{ steps.get_flake8_config.outputs.config_source }}" == "local" || "${{ steps.get_flake8_config.outputs.config_source }}" == "remote" ]]; then
+            CFG_OPT="--config .flake8"
+          fi
+          flake8 ${{ inputs.py_source_path }} ${CFG_OPT} --format=default > /tmp/flake8-findings.txt 2>&1 || true
 
           if [[ -s /tmp/flake8-findings.txt ]]; then
             COUNT=$(wc -l < /tmp/flake8-findings.txt | tr -d ' ')
@@ -348,14 +359,13 @@ jobs:
           echo "::warning::Claude flake8 session did not complete (max-turns or API error) — partial fixes may have been applied"
           echo "⚠️ **Claude flake8 session incomplete** — hit max-turns or API error. Partial fixes may have been committed." >> $GITHUB_STEP_SUMMARY
 
-      - name: Clean up copied .flake8
+      - name: Clean up downloaded .flake8
         if: inputs.py_ai_autofix_flake8
         run: |
-          SRC="${{ inputs.py_source_path }}"
-          if [[ "${SRC}" != "." && -f "${SRC}/.flake8" ]]; then
-            if ! git show HEAD:"${SRC}/.flake8" &>/dev/null 2>&1; then
-              rm -f "${SRC}/.flake8"
-              echo "🧹 Removed copied .flake8"
+          if [[ "${{ steps.get_flake8_config.outputs.config_source }}" == "remote" && -f ".flake8" ]]; then
+            if ! git show HEAD:".flake8" &>/dev/null 2>&1; then
+              rm -f .flake8
+              echo "🧹 Removed downloaded .flake8"
             fi
           fi
 
@@ -388,8 +398,7 @@ jobs:
         if: inputs.py_ai_autofix_bandit
         id: run_bandit
         run: |
-          cd "${{ inputs.py_source_path }}"
-          bandit -r . -f txt > /tmp/bandit-findings.txt 2>&1 || true
+          bandit -r ${{ inputs.py_source_path }} -f txt > /tmp/bandit-findings.txt 2>&1 || true
 
           if grep -q "Issue:" /tmp/bandit-findings.txt; then
             COUNT=$(grep -c "Issue:" /tmp/bandit-findings.txt || echo "0")

@@ -192,6 +192,9 @@ jobs:
         if: steps.isort_commit.outputs.diff == 'true'
         run: git push origin HEAD:${{ github.event.pull_request.head.ref || github.ref_name }}
 
+  # ══════════════════════════════════════════════════════════════════════
+  # FLAKE8
+  # ══════════════════════════════════════════════════════════════════════
   python_flake8:
     if: ${{ inputs.py_lint_include }}
     needs: [python_black, python_isort]
@@ -291,6 +294,10 @@ jobs:
         with:
           name: flake8-report
           path: flake8-report.json
+
+  # ══════════════════════════════════════════════════════════════════════
+  # BANDIT
+  # ══════════════════════════════════════════════════════════════════════
 
   python_bandit:
     if: ${{ inputs.py_lint_include }}
