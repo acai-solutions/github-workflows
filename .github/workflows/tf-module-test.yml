@@ -78,6 +78,10 @@ on:
         description: "all_steps_passed"
         value: ${{ jobs.terratest_run.outputs.terratest_status == 'success' }}
 
+concurrency:
+  group: ${{ inputs.concurrency_group }}
+  cancel-in-progress: false
+
 jobs:
   terratest_config:
     runs-on: ${{ inputs.runner_type }}
