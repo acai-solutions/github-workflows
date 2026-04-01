@@ -192,7 +192,7 @@ jobs:
           fi
 
       - name: Configure AWS Credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         env:
           AWS_ENDPOINT_URL_STS: ${{ steps.endpoint_domain.outputs.sts_endpoint }}
         with:
