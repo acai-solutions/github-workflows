@@ -40,7 +40,7 @@ on:
         type: string
       py_source_path:
         description: Relative path from repo root to the Python package root (where pyproject.toml lives)
-        default: shared/python
+        default: "."
         required: false
         type: string
       py_lint_include:
@@ -70,6 +70,13 @@ on:
         default: "[]"
         required: false
         type: string
+      py_test_auto_discover:
+        description: >
+          When true, pytest auto-discovers all tests recursively from
+          py_source_path instead of using py_test_modules.
+        required: false
+        default: true
+        type: boolean
       py_test_extra_pip_packages:
         description: Space-separated pip packages to install for tests
         default: ""
@@ -148,13 +155,14 @@ jobs:
 
   # ── Pytest per module ───────────────────────────────────────────────
   python_tests:
-    if: ${{ inputs.py_testing_include && inputs.py_test_modules != '[]' }}
+    if: ${{ inputs.py_testing_include && (inputs.py_test_auto_discover || inputs.py_test_modules != '[]') }}
     uses: ./.github/workflows/python-test.yml
     with:
       runner_type: ${{ inputs.runner_type }}
       py_version: ${{ inputs.py_version }}
       py_source_path: ${{ inputs.py_source_path }}
       py_test_modules: ${{ inputs.py_test_modules }}
+      py_test_auto_discover: ${{ inputs.py_test_auto_discover }}
       py_test_extra_pip_packages: ${{ inputs.py_test_extra_pip_packages }}
     secrets: inherit
 
@@ -181,6 +189,7 @@ jobs:
       py_source_path: ${{ inputs.py_source_path }}
       py_lint_config_path: ${{ inputs.py_lint_config_path }}
       py_test_modules: ${{ inputs.py_test_modules }}
+      py_test_auto_discover: ${{ inputs.py_test_auto_discover }}
       py_test_extra_pip_packages: ${{ inputs.py_test_extra_pip_packages }}
       py_ai_autofix_flake8: ${{ inputs.py_ai_autofix_flake8 }}
       py_ai_autofix_bandit: ${{ inputs.py_ai_autofix_bandit }}

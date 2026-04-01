@@ -15,7 +15,7 @@ on:
         type: string
       py_source_path:
         description: "Relative path from repo root to the Python package root (where pyproject.toml lives)"
-        default: "shared/python"
+        default: "."
         required: false
         type: string
       py_test_modules:
@@ -24,8 +24,16 @@ on:
           Each entry must correspond to a sub-package under the source path
           that contains a _test/ directory with test_*.py files.
           Example: '["logging","storage","xml_parser"]'
-        required: true
+        required: false
+        default: "[]"
         type: string
+      py_test_auto_discover:
+        description: >
+          When true, pytest auto-discovers all *_test.py / test_*.py files
+          recursively from py_source_path instead of using py_test_modules.
+        required: false
+        default: true
+        type: boolean
       py_test_extra_pip_packages:
         description: >
           Space-separated pip packages to install on top of the editable
@@ -46,6 +54,7 @@ defaults:
 jobs:
   # ── Run pytest per module in parallel ───────────────────────────────
   pytest_module:
+    if: ${{ !inputs.py_test_auto_discover && inputs.py_test_modules != '[]' }}
     runs-on: ${{ inputs.runner_type }}
     strategy:
       fail-fast: false
@@ -120,10 +129,70 @@ jobs:
             ${{ inputs.py_source_path }}/results-${{ matrix.module }}.xml
             ${{ inputs.py_source_path }}/pytest-output-${{ matrix.module }}.txt
 
+  # ── Auto-discover: run pytest recursively from source path ───────────
+  pytest_auto_discover:
+    if: ${{ inputs.py_test_auto_discover }}
+    runs-on: ${{ inputs.runner_type }}
+    name: "pytest · auto-discover"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python ${{ inputs.py_version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.py_version }}
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov
+
+          # Install editable package if pyproject.toml exists at source path
+          if [[ -f "${{ inputs.py_source_path }}/pyproject.toml" ]]; then
+            pip install -e "${{ inputs.py_source_path }}"
+          fi
+
+          # Extra packages requested by the caller
+          if [[ -n "${{ inputs.py_test_extra_pip_packages }}" ]]; then
+            pip install ${{ inputs.py_test_extra_pip_packages }}
+          fi
+
+      - name: Run tests — auto-discover
+        run: |
+          pytest "${{ inputs.py_source_path }}" \
+            -v \
+            --tb=long \
+            --junitxml="results-auto-discover.xml" \
+            2>&1 | tee "pytest-output-auto-discover.txt" \
+            || true
+
+          # Preserve the actual exit code from the XML
+          python3 -c "
+          import xml.etree.ElementTree as ET, sys
+          tree = ET.parse('results-auto-discover.xml')
+          root = tree.getroot()
+          failures = int(root.attrib.get('failures', 0))
+          errors = int(root.attrib.get('errors', 0))
+          sys.exit(1 if (failures + errors) > 0 else 0)
+          "
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-results-auto-discover
+          path: |
+            results-auto-discover.xml
+            pytest-output-auto-discover.txt
+
   # ── Gate job — single required status check ─────────────────────────
   pytest_gate:
     if: always()
-    needs: pytest_module
+    needs:
+      - pytest_module
+      - pytest_auto_discover
     runs-on: ${{ inputs.runner_type }}
     outputs:
       passed: ${{ steps.check.outputs.passed }}
@@ -131,19 +200,22 @@ jobs:
       - name: Evaluate test results
         id: check
         run: |
-          RESULT="${{ needs.pytest_module.result }}"
+          MODULE="${{ needs.pytest_module.result }}"
+          AUTO="${{ needs.pytest_auto_discover.result }}"
 
-          if [[ "${RESULT}" == "success" ]]; then
+          # At least one mode must have run successfully
+          if [[ "${MODULE}" == "success" || "${AUTO}" == "success" ]]; then
             echo "passed=true" >> "$GITHUB_OUTPUT"
-            echo "✅ All module tests passed"
-          elif [[ "${RESULT}" == "cancelled" ]]; then
+            echo "✅ All tests passed"
+          elif [[ "${MODULE}" == "cancelled" || "${AUTO}" == "cancelled" ]]; then
             echo "passed=false" >> "$GITHUB_OUTPUT"
             echo "⚠️ Tests were cancelled (likely by concurrency group) — skipping gate"
-            # Exit 0: don't fail the gate for cancellations, the whole
-            # workflow is being superseded by a newer run anyway.
             exit 0
+          elif [[ "${MODULE}" == "skipped" && "${AUTO}" == "skipped" ]]; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+            echo "⏭️ No test mode was active"
           else
             echo "passed=false" >> "$GITHUB_OUTPUT"
-            echo "::error::One or more module tests failed"
+            echo "::error::One or more tests failed"
             exit 1
           fi
