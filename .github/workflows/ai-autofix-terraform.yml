@@ -663,7 +663,7 @@ jobs:
 
       - name: Configure AWS Credentials via OIDC
         if: inputs.tf_ai_autofix_tests
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_TESTBED_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_TESTBED_AWS_REGION }}
