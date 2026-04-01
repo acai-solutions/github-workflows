@@ -207,7 +207,7 @@ jobs:
       # ── Auth + Checkout ─────────────────────────────────────────────────
       - name: Generate GitHub App Token
         id: app_token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.GH_RELEASE_APP_ID }}
           private-key: ${{ secrets.GH_RELEASE_APP_PRIVATE_KEY }}
@@ -308,7 +308,7 @@ jobs:
           if [[ "${{ steps.get_flake8_config.outputs.config_source }}" == "local" || "${{ steps.get_flake8_config.outputs.config_source }}" == "remote" ]]; then
             CFG_OPT="--config .flake8"
           fi
-          flake8 ${{ inputs.py_source_path }} ${CFG_OPT} --format=default > /tmp/flake8-findings.txt 2>&1 || true
+          flake8 . ${CFG_OPT} --format=default > /tmp/flake8-findings.txt 2>&1 || true
 
           if [[ -s /tmp/flake8-findings.txt ]]; then
             COUNT=$(wc -l < /tmp/flake8-findings.txt | tr -d ' ')
@@ -330,12 +330,10 @@ jobs:
           prompt: |
             Fix all flake8 findings in /tmp/flake8-findings.txt.
 
-            Working directory: ${{ inputs.py_source_path }}
-
             Steps:
             1. Read /tmp/flake8-findings.txt to see every finding.
             2. For each finding, edit the source file to fix the issue.
-            3. Re-run: cd ${{ inputs.py_source_path }} && flake8 . --format=default
+            3. Re-run: flake8 . --format=default
             4. Iterate until flake8 is clean.
 
             Common fixes:
@@ -346,7 +344,6 @@ jobs:
             - C901 too complex → extract helper functions
 
             Rules:
-            - Only edit files under ${{ inputs.py_source_path }}/
             - Do NOT modify .flake8, pyproject.toml, or any config file.
             - Do NOT add comments explaining your changes.
             - Do NOT commit anything — just edit files.
@@ -405,7 +402,7 @@ jobs:
         if: inputs.py_ai_autofix_bandit
         id: run_bandit
         run: |
-          bandit -r ${{ inputs.py_source_path }} -f txt > /tmp/bandit-findings.txt 2>&1 || true
+          bandit -r . -f txt > /tmp/bandit-findings.txt 2>&1 || true
 
           if grep -q "Issue:" /tmp/bandit-findings.txt; then
             COUNT=$(grep -c "Issue:" /tmp/bandit-findings.txt || echo "0")
@@ -427,19 +424,16 @@ jobs:
           prompt: |
             Fix all security findings in /tmp/bandit-findings.txt.
 
-            Working directory: ${{ inputs.py_source_path }}
-
             Steps:
             1. Read /tmp/bandit-findings.txt to see every finding.
             2. Fix each issue without changing observable behavior.
             3. For hardcoded secrets: replace with os.environ lookups or config files.
             4. For unsafe functions: replace with safe alternatives.
             5. If a finding is a confirmed false positive (e.g. test fixtures): add # nosec BXXX with the exact code.
-            6. Re-run: cd ${{ inputs.py_source_path }} && bandit -r . -f txt
+            6. Re-run: bandit -r . -f txt
             7. Iterate until no fixable findings remain.
 
             Rules:
-            - Only edit files under ${{ inputs.py_source_path }}/
             - Do NOT modify pyproject.toml or any config file.
             - Do NOT add explanatory comments (# nosec comments are allowed).
             - Do NOT commit anything — just edit files.

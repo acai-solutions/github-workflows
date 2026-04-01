@@ -46,13 +46,13 @@ jobs:
     steps:
       - name: Generate GitHub App Token
         id: app_token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets[inputs.app_id] }}
           private-key: ${{ secrets[inputs.app_private_key] }}
 
       - name: "Create PR: *_ai → feature branch"
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ steps.app_token.outputs.token }}
           script: |
