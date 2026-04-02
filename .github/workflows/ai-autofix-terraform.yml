@@ -750,17 +750,17 @@ jobs:
 
 
             ✋ TEST-BED INTEGRATION CONSTRAINTS (MANDATORY):
-            The following files in ${{ inputs.tf_terratest_examples_path }}/ are part of test-bed integration
+            The following files in ${{ inputs.tf_terratest_examples_path }}/** are part of test-bed integration
             and MUST NOT be modified:
               - backend.tf       (injected during CI)
               - variables.tf     (injected during CI)
               - provider.tf      (injected during CI)
             
-            Do NOT add or provide .tfvars files in ${{ inputs.tf_terratest_path }}/ — they are
+            Do NOT add or provide backend.tf or *.tfvars files in ${{ inputs.tf_terratest_path }}/** — they are
             injected by the GitHub Actions workflow and will conflict if pre-committed.
 
             Rules:
-            - Edit .tf files in ${{ inputs.tf_terratest_examples_path }}/ (except protected test-bed files) and .go files in ${{ inputs.tf_terratest_path }}/.
+            - Edit .tf files in ${{ inputs.tf_terratest_examples_path }}/** (except protected test-bed files) and .go files in ${{ inputs.tf_terratest_path }}/**.
             - UPDATE go.mod and go.sum as needed to fix vulnerabilities or resolve test failures (run "go mod tidy" after changes).
             - Do NOT modify backend.tf, variables.tf, or provider.tf in examples/ (test-bed managed).
             - Do NOT commit .tfvars files (test-bed injected during CI).
