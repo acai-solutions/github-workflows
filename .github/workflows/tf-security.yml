@@ -236,6 +236,7 @@ jobs:
           output_file_path: checkov-findings.txt,checkov-report.xml
           quiet: true
           soft_fail: ${{ inputs.tf_checkov_failures_allow }}
+          download_external_modules: true
 
       - name: Display Checkov findings
         if: always()
