@@ -414,7 +414,7 @@ jobs:
 
       - name: Create PR Comment for Warnings
         if: inputs.py_lint_include == true && needs.python_flake8.outputs.flake8_status != 'success' && inputs.py_lint_allow_failures == true && github.event_name == 'pull_request'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const issueNumber = context.issue.number;
