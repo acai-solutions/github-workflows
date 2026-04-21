@@ -23,6 +23,13 @@ This repository provides reusable [GitHub Workflows][github_workflows_link] desi
 | `checks-hcl-module.yml` | HCL checks: format, docs, security (TFLint, Trivy, Checkov), Terratest, and optional AI autofix |
 | `checks-py-hcl-module.yml` | Combined Python + HCL checks (runs `checks-py-module` then `checks-hcl-module`) |
 
+### Backwards-Compatible Shim Workflows
+
+| Workflow | Description |
+|----------|-------------|
+| `checks-tf-module.yml` | **Deprecated** — thin wrapper that delegates to `checks-hcl-module.yml` with `hcl_engine=terraform`. Accepts the old `tf_*` input names. |
+| `checks-py-tf-module.yml` | **Deprecated** — thin wrapper that delegates to `checks-py-hcl-module.yml` with `hcl_engine=terraform`. Accepts the old `tf_*` input names. |
+
 ### Building-Block Workflows (called by check workflows)
 
 | Workflow | Description |
@@ -79,7 +86,7 @@ flowchart TD
 
 ### Enabling AI Autofix
 
-Pass `py_ai_autofix_include: true` and/or `tf_ai_autofix_include: true` in your consumer workflow and add `**_ai` to the push branch filter:
+Pass `py_ai_autofix_include: true` and/or `hcl_ai_autofix_include: true` in your consumer workflow and add `**_ai` to the push branch filter:
 
 ```yaml
 on:
@@ -106,17 +113,39 @@ jobs:
 
 ## Dual-Head: Terraform / OpenTofu
 
-All HCL workflows support both **Terraform** and **OpenTofu** via the `hcl_engine` input. The default is `terraform`.
+All HCL workflows support both **Terraform** and **OpenTofu**. The HCL engine is determined per test-matrix entry, allowing you to test with both engines in a single pipeline run.
+
+### Base & Security (workflow-level)
+
+The `hcl_engine` input controls which binary is used for `fmt` and docs generation:
 
 ```yaml
 jobs:
   checks:
     uses: acai-solutions/github-workflows/.github/workflows/checks-hcl-module.yml@main
     with:
-      hcl_engine: opentofu              # or "terraform" (default)
-      hcl_engine_version: 1.9.0          # version of the selected engine
+      hcl_engine: terraform              # or "opentofu" (default: terraform)
+      hcl_engine_version: latest          # version for fmt/docs only
     secrets: inherit
 ```
+
+### Terratest (matrix-level)
+
+The test engine is embedded in each matrix JSON config file (via `"hcl_engine": "terraform"` or `"hcl_engine": "opentofu"`). Pass multiple configs as a JSON array to test both engines:
+
+```yaml
+jobs:
+  checks:
+    uses: acai-solutions/github-workflows/.github/workflows/checks-hcl-module.yml@main
+    with:
+      hcl_test_bed_aws_terratest_configs: >-
+        ["aws/matrix_tf1x5x7_aws5x80x0.json", "aws/matrix_ofu1x6x0_aws5x80x0.json"]
+    secrets: inherit
+```
+
+This creates matrix entries for each version × engine combination. The workflow automatically:
+- Sets up the correct binary (`hashicorp/setup-terraform` or `opentofu/setup-opentofu`)
+- Sets `TERRATEST_TERRAFORM_BINARY` to `tofu` or `terraform`
 
 | `hcl_engine` | Binary | Setup Action | Registry |
 |--------------|--------|-------------|----------|
@@ -124,8 +153,6 @@ jobs:
 | `opentofu` | `tofu` | `opentofu/setup-opentofu@v1` | `registry.opentofu.org` |
 
 ### Terratest Dual-Head
-
-When `hcl_engine: opentofu` is set, the `TERRATEST_TERRAFORM_BINARY` environment variable is automatically set to `tofu`. Your test helpers should read this:
 
 ```go
 func getTerraformBinary() string {
