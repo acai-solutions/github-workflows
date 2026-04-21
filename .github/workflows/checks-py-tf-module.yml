@@ -150,12 +150,12 @@ on:
         type: string
       tf_terratest_path:
         description: "Path to terratest directory"
-        default: "_test/terratest"
+        default: "tests/terratest"
         required: false
         type: string
       tf_terratest_examples_path:
         description: "Path to terratest examples directory"
-        default: "_example"
+        default: "examples"
         required: false
         type: string
 
