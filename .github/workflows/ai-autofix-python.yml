@@ -209,7 +209,7 @@ jobs:
         id: app_token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.GH_RELEASE_APP_ID }}
+          app-id: ${{ secrets.GH_RELEASE_APP_ID }}
           private-key: ${{ secrets.GH_RELEASE_APP_PRIVATE_KEY }}
 
       - name: Checkout
@@ -239,6 +239,16 @@ jobs:
             fi
           fi
           echo "✅ Branch: $(git branch --show-current)"
+
+      - name: Exclude CI artifacts from git
+        run: |
+          mkdir -p .git/info
+          cat >> .git/info/exclude <<'EOF'
+          node_modules/
+          __pycache__/
+          *.egg-info/
+          .pytest_cache/
+          EOF
 
       # ── Python environment ──────────────────────────────────────────────
       - name: Set up Python ${{ inputs.py_version }}

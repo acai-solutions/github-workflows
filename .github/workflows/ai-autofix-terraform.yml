@@ -222,7 +222,7 @@ jobs:
         id: app_token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.GH_RELEASE_APP_ID }}
+          app-id: ${{ secrets.GH_RELEASE_APP_ID }}
           private-key: ${{ secrets.GH_RELEASE_APP_PRIVATE_KEY }}
 
       - name: Checkout
@@ -252,6 +252,16 @@ jobs:
             fi
           fi
           echo "✅ Branch: $(git branch --show-current)"
+
+      - name: Exclude CI artifacts from git
+        run: |
+          mkdir -p .git/info
+          cat >> .git/info/exclude <<'EOF'
+          node_modules/
+          .terraform/
+          *.tfstate
+          *.tfstate.backup
+          EOF
 
       # ── Download findings from upstream check jobs ──────────────────────
       - name: Download security findings
@@ -315,7 +325,7 @@ jobs:
 
       - name: Set up TFLint
         if: inputs.tf_ai_autofix_tflint
-        uses: terraform-linters/setup-tflint@v6
+        uses: terraform-linters/setup-tflint@v5
         with:
           tflint_version: ${{ inputs.tf_lint_version }}
 
