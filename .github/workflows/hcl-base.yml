@@ -42,19 +42,19 @@ on:
     outputs:
       all_checks_passed:
         description: "Indicates if all pipeline steps passed successfully"
-        value: ${{ jobs.tf_base_terraform_format.outputs.diff_exists == 'false' && (inputs.hcl_docs_skip == true || jobs.tf_base_terraform_docs.outputs.diff_exists == 'false') }}
+        value: ${{ jobs.hcl_base_format.outputs.diff_exists == 'false' && (inputs.hcl_docs_skip == true || jobs.hcl_base_docs.outputs.diff_exists == 'false') }}
 
       format_status:
         description: "Terraform format check status"
-        value: ${{ jobs.tf_base_terraform_format.outputs.fmt_status }}
+        value: ${{ jobs.hcl_base_format.outputs.fmt_status }}
 
       docs_status:
         description: "Terraform docs generation status"
-        value: ${{ inputs.hcl_docs_skip == true && 'skipped' || jobs.tf_base_terraform_docs.outputs.docs_status }}
+        value: ${{ inputs.hcl_docs_skip == true && 'skipped' || jobs.hcl_base_docs.outputs.docs_status }}
 
 jobs:
 
-  tf_base_terraform_format:
+  hcl_base_format:
     runs-on: ${{ inputs.runner_type }}
     outputs:
       fmt_status: ${{ steps.fmt.outcome }}
@@ -103,9 +103,9 @@ jobs:
         if: steps.fmt_commit.outputs.diff == 'true'
         run: git push origin HEAD:${{ github.event.pull_request.head.ref }}
 
-  tf_base_terraform_docs:
-    needs: tf_base_terraform_format
-    if: ${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' && inputs.hcl_docs_skip != true }}
+  hcl_base_docs:
+    needs: hcl_base_format
+    if: ${{ needs.hcl_base_format.outputs.diff_exists == 'false' && inputs.hcl_docs_skip != true }}
     runs-on: ${{ inputs.runner_type }}
     outputs:
       docs_status: ${{ steps.docs.outcome }}
@@ -146,8 +146,8 @@ jobs:
           git-push-user-email: ${{ inputs.commit_email }}
           git-commit-message: "docs(terraform-docs): update readme"
 
-  tf_base_summary:
-    needs: [tf_base_terraform_format, tf_base_terraform_docs]
+  hcl_base_summary:
+    needs: [hcl_base_format, hcl_base_docs]
     runs-on: ubuntu-latest
     if: always()
 
@@ -160,18 +160,18 @@ jobs:
           echo '| Check | Status | Result |' >> $GITHUB_STEP_SUMMARY
           echo '|-------|--------|--------|' >> $GITHUB_STEP_SUMMARY
 
-          echo "| 🎨 Terraform Format | ${{ needs.tf_base_terraform_format.outputs.fmt_status }} | ${{ needs.tf_base_terraform_format.outputs.diff_exists == 'true' && '⚠️ Changes committed' || '✅ No changes needed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🎨 HCL Format | ${{ needs.hcl_base_format.outputs.fmt_status }} | ${{ needs.hcl_base_format.outputs.diff_exists == 'true' && '⚠️ Changes committed' || '✅ No changes needed' }} |" >> $GITHUB_STEP_SUMMARY
 
           if [[ "${{ inputs.hcl_docs_skip }}" == "true" ]]; then
-            echo "| 📚 Terraform Docs | ⏭️ Skipped | ✅ |" >> $GITHUB_STEP_SUMMARY
+            echo "| 📚 HCL Docs | ⏭️ Skipped | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| 📚 Terraform Docs | ${{ needs.tf_base_terraform_docs.outputs.docs_status }} | ${{ needs.tf_base_terraform_docs.outputs.diff_exists == 'true' && '⚠️ Docs updated' || '✅ Docs up to date' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| 📚 HCL Docs | ${{ needs.hcl_base_docs.outputs.docs_status }} | ${{ needs.hcl_base_docs.outputs.diff_exists == 'true' && '⚠️ Docs updated' || '✅ Docs up to date' }} |" >> $GITHUB_STEP_SUMMARY
           fi
 
           if [[ "${{ inputs.hcl_docs_skip }}" == "true" ]]; then
-            OVERALL_STATUS="${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' }}"
+            OVERALL_STATUS="${{ needs.hcl_base_format.outputs.diff_exists == 'false' }}"
           else
-            OVERALL_STATUS="${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' && needs.tf_base_terraform_docs.outputs.diff_exists == 'false' }}"
+            OVERALL_STATUS="${{ needs.hcl_base_format.outputs.diff_exists == 'false' && needs.hcl_base_docs.outputs.diff_exists == 'false' }}"
           fi
 
           echo '' >> $GITHUB_STEP_SUMMARY

@@ -225,21 +225,21 @@ on:
 
     outputs:
       all_checks_passed:
-        description: True if both Python and Terraform checks passed
+        description: True if both Python and HCL checks passed
         value: ${{ jobs.python_checks.outputs.all_steps_passed == 'true' &&
-          jobs.terraform_checks.outputs.all_checks_passed == 'true' }}
+          jobs.hcl_checks.outputs.all_checks_passed == 'true' }}
       python_status:
         description: Python checks status
         value: ${{ jobs.python_checks.outputs.all_steps_passed }}
-      terraform_status:
-        description: Terraform checks status
-        value: ${{ jobs.terraform_checks.outputs.all_checks_passed }}
-      terraform_base_status:
-        description: Terraform base pipeline status
-        value: ${{ jobs.terraform_checks.outputs.terraform_base_status }}
-      terraform_security_status:
-        description: Terraform security checks status
-        value: ${{ jobs.terraform_checks.outputs.security_status }}
+      hcl_status:
+        description: HCL checks status
+        value: ${{ jobs.hcl_checks.outputs.all_checks_passed }}
+      hcl_base_status:
+        description: HCL base pipeline status
+        value: ${{ jobs.hcl_checks.outputs.hcl_base_status }}
+      hcl_security_status:
+        description: HCL security checks status
+        value: ${{ jobs.hcl_checks.outputs.security_status }}
       python_autofix_applied:
         description: Whether Python AI autofix was applied
         value: ${{ jobs.python_checks.outputs.autofix_applied }}
@@ -247,11 +247,11 @@ on:
         description: Name of the _cop branch used for Python fixes
         value: ${{ jobs.python_checks.outputs.ai_branch }}
       hcl_autofix_applied:
-        description: Whether Terraform AI autofix was applied
-        value: ${{ jobs.terraform_checks.outputs.autofix_applied }}
+        description: Whether HCL AI autofix was applied
+        value: ${{ jobs.hcl_checks.outputs.autofix_applied }}
       hcl_ai_branch:
-        description: Name of the _cop branch used for Terraform fixes
-        value: ${{ jobs.terraform_checks.outputs.ai_branch }}
+        description: Name of the _cop branch used for HCL fixes
+        value: ${{ jobs.hcl_checks.outputs.ai_branch }}
 
 concurrency:
   group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
@@ -284,14 +284,14 @@ jobs:
       py_ai_autofix_max_attempts: ${{ inputs.py_ai_autofix_max_attempts }}
     secrets: inherit
 
-  # 2) Then run Terraform checks (only if Python passed)
-  terraform_checks:
+  # 2) Then run HCL checks (only if Python passed)
+  hcl_checks:
     needs:
       - python_checks
     if: ${{ needs.python_checks.outputs.all_steps_passed == 'true' }}
     uses: ./.github/workflows/checks-hcl-module.yml
     with:
-      concurrency_group: ${{ format('{0}:tf', inputs.concurrency_group) }}
+      concurrency_group: ${{ format('{0}:hcl', inputs.concurrency_group) }}
       runner_type: ${{ inputs.runner_type }}
       commit_user: ${{ inputs.commit_user }}
       commit_email: ${{ inputs.commit_email }}
@@ -320,31 +320,31 @@ jobs:
       hcl_ai_autofix_max_attempts: ${{ inputs.hcl_ai_autofix_max_attempts }}
     secrets: inherit
 
-  tf_py_checks_summary:
+  hcl_py_checks_summary:
     needs:
       - python_checks
-      - terraform_checks
+      - hcl_checks
     runs-on: ${{ inputs.runner_type }}
     if: always()
     steps:
       - name: Generate Overall Summary
         shell: bash
         run: |
-          echo '# 📊 Python + Terraform Module Checks - Overall Summary' >> $GITHUB_STEP_SUMMARY
+          echo '# 📊 Python + HCL Module Checks - Overall Summary' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '## Pipeline Results' >> $GITHUB_STEP_SUMMARY
           echo '| Component | Status |' >> $GITHUB_STEP_SUMMARY
           echo '|-----------|--------|' >> $GITHUB_STEP_SUMMARY
 
           echo "| 🐍 Python Module Checks | ${{ needs.python_checks.outputs.all_steps_passed == 'true' && '✅ Passed' || needs.python_checks.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🛠️ Terraform Module Checks | ${{ needs.terraform_checks.outputs.all_checks_passed == 'true' && '✅ Passed' || needs.terraform_checks.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🛠️ HCL Module Checks | ${{ needs.hcl_checks.outputs.all_checks_passed == 'true' && '✅ Passed' || needs.hcl_checks.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
 
           PY_PASSED="${{ needs.python_checks.outputs.all_steps_passed == 'true' }}"
-          TF_RES="${{ needs.terraform_checks.result }}"
-          TF_PASSED="${{ needs.terraform_checks.outputs.all_checks_passed == 'true' }}"
+          HCL_RES="${{ needs.hcl_checks.result }}"
+          HCL_PASSED="${{ needs.hcl_checks.outputs.all_checks_passed == 'true' }}"
 
-          if [[ "$PY_PASSED" == "true" && "$TF_RES" == "success" && "$TF_PASSED" == "true" ]]; then
+          if [[ "$PY_PASSED" == "true" && "$HCL_RES" == "success" && "$HCL_PASSED" == "true" ]]; then
             echo "**🎉 Overall Result: ✅ All checks passed successfully!**" >> $GITHUB_STEP_SUMMARY
           else
             echo "**⚠️ Overall Result: ❌ Some checks failed. Please review the detailed results above.**" >> $GITHUB_STEP_SUMMARY
@@ -354,8 +354,8 @@ jobs:
             if [[ "$PY_PASSED" != "true" ]]; then
               echo "- Python Module Checks" >> $GITHUB_STEP_SUMMARY
             fi
-            if [[ "$TF_RES" != "success" || "$TF_PASSED" != "true" ]]; then
-              echo "- Terraform Module Checks" >> $GITHUB_STEP_SUMMARY
+            if [[ "$HCL_RES" != "success" || "$HCL_PASSED" != "true" ]]; then
+              echo "- HCL Module Checks" >> $GITHUB_STEP_SUMMARY
             fi
           fi
 
@@ -364,9 +364,9 @@ jobs:
         shell: bash
         run: |
           PY_PASSED="${{ needs.python_checks.outputs.all_steps_passed == 'true' }}"
-          TF_RES="${{ needs.terraform_checks.result }}"
-          TF_PASSED="${{ needs.terraform_checks.outputs.all_checks_passed == 'true' }}"
-          if [[ "$PY_PASSED" != "true" ]] || [[ "$TF_RES" != "success" || "$TF_PASSED" != "true" ]]; then
+          HCL_RES="${{ needs.hcl_checks.result }}"
+          HCL_PASSED="${{ needs.hcl_checks.outputs.all_checks_passed == 'true' }}"
+          if [[ "$PY_PASSED" != "true" ]] || [[ "$HCL_RES" != "success" || "$HCL_PASSED" != "true" ]]; then
             echo "::error::Some checks failed. See summary above for details."
             exit 1
           fi

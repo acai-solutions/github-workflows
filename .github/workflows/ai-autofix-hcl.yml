@@ -304,7 +304,7 @@ jobs:
           tofu_version: ${{ inputs.hcl_engine_version }}
 
       - name: Apply HCL fmt
-        id: tf_fmt
+        id: hcl_fmt
         env:
           HCL_BINARY: ${{ inputs.hcl_engine == 'opentofu' && 'tofu' || 'terraform' }}
         run: |

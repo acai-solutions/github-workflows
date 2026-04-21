@@ -1,3 +1,4 @@
+# for backwards compatibility with existing callers of checks-tf-module.yml, which is referenced in many repos. New workflows should call checks-hcl-module.yml directly with hcl_engine=terraform instead of this shim.
 ---
 name: Terraform Module Checks
 on:
@@ -151,7 +152,7 @@ on:
         value: ${{ jobs.hcl_checks.outputs.all_checks_passed }}
       terraform_base_status:
         description: Terraform base pipeline status
-        value: ${{ jobs.hcl_checks.outputs.terraform_base_status }}
+        value: ${{ jobs.hcl_checks.outputs.hcl_base_status }}
       security_status:
         description: Security checks status
         value: ${{ jobs.hcl_checks.outputs.security_status }}

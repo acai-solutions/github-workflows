@@ -155,21 +155,21 @@ on:
     outputs:
       all_checks_passed:
         description: Indicates if all pipeline steps passed successfully
-        value: ${{ jobs.terraform_base.outputs.all_checks_passed == 'true' &&
-          jobs.terraform_security.outputs.all_checks_passed == 'true' &&
-          (inputs.hcl_terratest_run_tests != true || jobs.terraform_module_test.outputs.all_checks_passed == 'true') }}
-      terraform_base_status:
-        description: Terraform base pipeline status
-        value: ${{ jobs.terraform_base.outputs.all_checks_passed }}
+        value: ${{ jobs.hcl_base.outputs.all_checks_passed == 'true' &&
+          jobs.hcl_security.outputs.all_checks_passed == 'true' &&
+          (inputs.hcl_terratest_run_tests != true || jobs.hcl_module_test.outputs.all_checks_passed == 'true') }}
+      hcl_base_status:
+        description: HCL base pipeline status
+        value: ${{ jobs.hcl_base.outputs.all_checks_passed }}
       security_status:
         description: Security checks status
-        value: ${{ jobs.terraform_security.outputs.all_checks_passed }}
+        value: ${{ jobs.hcl_security.outputs.all_checks_passed }}
       autofix_applied:
-        description: Whether terraform-ai-autofix was applied
-        value: ${{ jobs.terraform_ai_autofix.outputs.fixes_applied }}
+        description: Whether HCL AI autofix was applied
+        value: ${{ jobs.hcl_ai_autofix.outputs.fixes_applied }}
       ai_branch:
         description: Name of the _cop branch used for fixes
-        value: ${{ jobs.terraform_ai_autofix.outputs.ai_branch }}
+        value: ${{ jobs.hcl_ai_autofix.outputs.ai_branch }}
 
 concurrency:
   group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
@@ -177,7 +177,7 @@ concurrency:
 
 jobs:
   # ── Base: format + docs ─────────────────────────────────────────────
-  terraform_base:
+  hcl_base:
     if: ${{ always() }}
     uses: ./.github/workflows/hcl-base.yml
     with:
@@ -190,9 +190,9 @@ jobs:
       hcl_docs_skip: ${{ inputs.hcl_docs_skip }}
 
   # ── Security: TFLint + Trivy + Checkov ──────────────────────────────
-  terraform_security:
-    needs: terraform_base
-    if: ${{ needs.terraform_base.result == 'success' }}
+  hcl_security:
+    needs: hcl_base
+    if: ${{ needs.hcl_base.result == 'success' }}
     uses: ./.github/workflows/hcl-security.yml
     with:
       concurrency_group: ${{ inputs.concurrency_group }}
@@ -207,9 +207,9 @@ jobs:
       hcl_checkov_failures_allow: ${{ inputs.hcl_checkov_failures_allow }}
 
   # ── Terratest ───────────────────────────────────────────────────────
-  terraform_module_test:
-    needs: terraform_security
-    if: ${{ inputs.hcl_terratest_run_tests && needs.terraform_security.outputs.all_checks_passed == 'true' }}
+  hcl_module_test:
+    needs: hcl_security
+    if: ${{ inputs.hcl_terratest_run_tests && needs.hcl_security.outputs.all_checks_passed == 'true' }}
     uses: ./.github/workflows/hcl-module-test.yml
     with:
       hcl_terratest_config_repo: ${{ inputs.gh_wf_config_repo }}
@@ -222,21 +222,21 @@ jobs:
     secrets: inherit
 
   # ── AI Autofix on _cop branch (only when checks fail) ───────────────
-  terraform_ai_autofix:
+  hcl_ai_autofix:
     needs:
-      - terraform_base
-      - terraform_security
-      - terraform_module_test
+      - hcl_base
+      - hcl_security
+      - hcl_module_test
     if: |
       always() &&
       inputs.hcl_ai_autofix_include &&
-      (needs.terraform_base.outputs.all_checks_passed != 'true' ||
-       needs.terraform_security.outputs.all_checks_passed != 'true' ||
-       (needs.terraform_module_test.result != 'skipped' &&
-        needs.terraform_module_test.outputs.all_checks_passed != 'true')) &&
-      !(needs.terraform_base.result == 'skipped' &&
-        needs.terraform_security.result == 'skipped' &&
-        needs.terraform_module_test.result == 'skipped')
+      (needs.hcl_base.outputs.all_checks_passed != 'true' ||
+       needs.hcl_security.outputs.all_checks_passed != 'true' ||
+       (needs.hcl_module_test.result != 'skipped' &&
+        needs.hcl_module_test.outputs.all_checks_passed != 'true')) &&
+      !(needs.hcl_base.result == 'skipped' &&
+        needs.hcl_security.result == 'skipped' &&
+        needs.hcl_module_test.result == 'skipped')
     uses: ./.github/workflows/ai-autofix-hcl.yml
     with:
       runner_type: ${{ inputs.runner_type }}
@@ -259,34 +259,34 @@ jobs:
     secrets: inherit
 
   # ── Summary gate ────────────────────────────────────────────────────
-  tf_module_checks_summary:
+  hcl_module_checks_summary:
     needs:
-      - terraform_base
-      - terraform_security
-      - terraform_module_test
-      - terraform_ai_autofix
+      - hcl_base
+      - hcl_security
+      - hcl_module_test
+      - hcl_ai_autofix
     runs-on: ${{ inputs.runner_type }}
     if: always()
     steps:
       - name: Summary
         run: |
-          echo '# 📊 Terraform Module Checks' >> $GITHUB_STEP_SUMMARY
+          echo '# 📊 HCL Module Checks' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '| Component | Status |' >> $GITHUB_STEP_SUMMARY
           echo '|-----------|--------|' >> $GITHUB_STEP_SUMMARY
-          echo "| 📝 Base (Format & Docs) | ${{ needs.terraform_base.outputs.all_checks_passed == 'true' && '✅' || needs.terraform_base.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🔒 Security | ${{ needs.terraform_security.outputs.all_checks_passed == 'true' && '✅' || needs.terraform_security.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📝 Base (Format & Docs) | ${{ needs.hcl_base.outputs.all_checks_passed == 'true' && '✅' || needs.hcl_base.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔒 Security | ${{ needs.hcl_security.outputs.all_checks_passed == 'true' && '✅' || needs.hcl_security.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           if [[ "${{ inputs.hcl_terratest_run_tests }}" == "true" ]]; then
-            echo "| 🧪 Terratest | ${{ needs.terraform_module_test.outputs.all_checks_passed == 'true' && '✅' || needs.terraform_module_test.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🧪 Terratest | ${{ needs.hcl_module_test.outputs.all_checks_passed == 'true' && '✅' || needs.hcl_module_test.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "| 🤖 AI Autofix | ${{ needs.terraform_ai_autofix.outputs.fixes_applied == 'true' && '✅ Applied' || needs.terraform_ai_autofix.result == 'skipped' && '⏭️' || '—' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🤖 AI Autofix | ${{ needs.hcl_ai_autofix.outputs.fixes_applied == 'true' && '✅ Applied' || needs.hcl_ai_autofix.result == 'skipped' && '⏭️' || '—' }} |" >> $GITHUB_STEP_SUMMARY
 
       - name: Gate
         if: always()
         run: |
-          BASE="${{ needs.terraform_base.outputs.all_checks_passed == 'true' }}"
-          SEC="${{ needs.terraform_security.outputs.all_checks_passed == 'true' }}"
-          TEST="${{ inputs.hcl_terratest_run_tests != true || needs.terraform_module_test.outputs.all_checks_passed == 'true' }}"
+          BASE="${{ needs.hcl_base.outputs.all_checks_passed == 'true' }}"
+          SEC="${{ needs.hcl_security.outputs.all_checks_passed == 'true' }}"
+          TEST="${{ inputs.hcl_terratest_run_tests != true || needs.hcl_module_test.outputs.all_checks_passed == 'true' }}"
 
           if [[ "$BASE" != "true" || "$SEC" != "true" || "$TEST" != "true" ]]; then
             echo "::error::Some checks failed."
@@ -296,25 +296,25 @@ jobs:
   # ── Create PR: _ai → feature (when _ai branch passes all checks) ───
   create_ai_pr_on_pass:
     needs:
-      - terraform_base
-      - terraform_security
-      - terraform_module_test
+      - hcl_base
+      - hcl_security
+      - hcl_module_test
     if: |
       always() &&
       inputs.hcl_ai_autofix_include &&
       endsWith(github.head_ref || github.ref_name, '_ai') &&
-      needs.terraform_base.outputs.all_checks_passed == 'true' &&
-      needs.terraform_security.outputs.all_checks_passed == 'true' &&
-      (inputs.hcl_terratest_run_tests != true || needs.terraform_module_test.outputs.all_checks_passed == 'true')
+      needs.hcl_base.outputs.all_checks_passed == 'true' &&
+      needs.hcl_security.outputs.all_checks_passed == 'true' &&
+      (inputs.hcl_terratest_run_tests != true || needs.hcl_module_test.outputs.all_checks_passed == 'true')
     uses: ./.github/workflows/ai-autofix-create-ai-pr.yml
     with:
       runner_type: ${{ inputs.runner_type }}
       app_id: GH_RELEASE_APP_ID
       app_private_key: GH_RELEASE_APP_PRIVATE_KEY
       ai_branch: ${{ github.head_ref || github.ref_name }}
-      pr_title: "fix: Terraform autofix for `${{ github.head_ref || github.ref_name }}`"
+      pr_title: "fix: HCL autofix for `${{ github.head_ref || github.ref_name }}`"
       pr_body: |
-        ## 🤖 Terraform AI Autofix (Claude Code)
+        ## 🤖 HCL AI Autofix (Claude Code)
 
         All checks passed on `${{ github.head_ref || github.ref_name }}`.
 

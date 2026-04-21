@@ -58,10 +58,10 @@ on:
     outputs:
       all_checks_passed:
         description: "Indicates if all security checks passed successfully"
-        value: ${{ jobs.tf_security_checks.outputs.all_checks_passed }}
+        value: ${{ jobs.hcl_security_checks.outputs.all_checks_passed }}
 
 jobs:
-  tf_security_checks:
+  hcl_security_checks:
     runs-on: ${{ inputs.runner_type }}
     permissions:
       contents: read
@@ -295,28 +295,28 @@ jobs:
           fi
           echo "all_passed=true" >> "$GITHUB_OUTPUT"
 
-  tf_security_checks_summary:
-    needs: tf_security_checks
+  hcl_security_checks_summary:
+    needs: hcl_security_checks
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Output Summary
         run: |
-          echo '# 🔒 Terraform Security Checks' >> $GITHUB_STEP_SUMMARY
+          echo '# 🔒 HCL Security Checks' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '## Security Scan Results' >> $GITHUB_STEP_SUMMARY
           echo '| Check | Status | Result |' >> $GITHUB_STEP_SUMMARY
           echo '|-------|--------|--------|' >> $GITHUB_STEP_SUMMARY
           
           if [[ "${{ inputs.hcl_lint_include }}" == "true" ]]; then
-            echo "| 🔍 TFLint (Code Quality) | ${{ needs.tf_security_checks.outputs.tflint_status }} | ${{ needs.tf_security_checks.outputs.tflint_status == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔍 TFLint (Code Quality) | ${{ needs.hcl_security_checks.outputs.tflint_status }} | ${{ needs.hcl_security_checks.outputs.tflint_status == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           fi
           
-          echo "| 🛡️ Trivy (Security) | ${{ needs.tf_security_checks.outputs.trivy_status }} | ${{ needs.tf_security_checks.outputs.trivy_status == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ Checkov (Compliance) | ${{ needs.tf_security_checks.outputs.checkov_status }} | ${{ needs.tf_security_checks.outputs.checkov_status == 'success' && '✅ Passed' || (inputs.hcl_checkov_failures_allow && '⚠️ Failed (Allowed)' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🛡️ Trivy (Security) | ${{ needs.hcl_security_checks.outputs.trivy_status }} | ${{ needs.hcl_security_checks.outputs.trivy_status == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Checkov (Compliance) | ${{ needs.hcl_security_checks.outputs.checkov_status }} | ${{ needs.hcl_security_checks.outputs.checkov_status == 'success' && '✅ Passed' || (inputs.hcl_checkov_failures_allow && '⚠️ Failed (Allowed)' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           
-          if [[ "${{ needs.tf_security_checks.outputs.all_checks_passed }}" == "true" ]]; then
+          if [[ "${{ needs.hcl_security_checks.outputs.all_checks_passed }}" == "true" ]]; then
             echo "**🎉 Overall Result: ✅ All security checks passed**" >> $GITHUB_STEP_SUMMARY
           else
             echo "**⚠️ Overall Result: ❌ Some security checks failed**" >> $GITHUB_STEP_SUMMARY
