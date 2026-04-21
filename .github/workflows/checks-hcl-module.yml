@@ -173,7 +173,7 @@ on:
 
 concurrency:
   group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # ── Base: format + docs ─────────────────────────────────────────────
