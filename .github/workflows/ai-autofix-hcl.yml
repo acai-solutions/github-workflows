@@ -1,4 +1,4 @@
-name: Terraform AI Autofix (Claude Code)
+name: HCL AI Autofix (Claude Code)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Reusable workflow: Auto-fixes Terraform findings on a dedicated _ai branch.
@@ -19,7 +19,7 @@ name: Terraform AI Autofix (Claude Code)
 # Prerequisites:
 #   - GH_RELEASE_APP_ID + GH_RELEASE_APP_PRIVATE_KEY secrets
 #   - ANTHROPIC_API_KEY secret (for Claude Code sessions)
-#   - AWS_TESTBED_OIDC_ROLE_ARN secret (only when tf_ai_autofix_tests is enabled)
+#   - AWS_TESTBED_OIDC_ROLE_ARN secret (only when hcl_ai_autofix_tests is enabled)
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -30,8 +30,13 @@ on:
         required: false
         default: "ubuntu-latest"
         type: string
-      tf_version:
-        description: "Terraform version for formatting"
+      hcl_engine:
+        description: "HCL engine to use: 'terraform' or 'opentofu'"
+        default: "terraform"
+        required: false
+        type: string
+      hcl_engine_version:
+        description: "Terraform/OpenTofu version for formatting"
         default: "latest"
         required: false
         type: string
@@ -45,52 +50,52 @@ on:
         default: "main"
         required: false
         type: string
-      tf_lint_config_path:
+      hcl_lint_config_path:
         description: 'Path to tflint config in gh_wf_config_repo (e.g. "aws/.tflint.hcl")'
         default: ".tflint.hcl"
         required: false
         type: string
-      tf_lint_version:
+      hcl_lint_version:
         description: "TFLint version to use"
         default: "latest"
         required: false
         type: string
-      tf_trivy_version:
+      hcl_trivy_version:
         description: "Trivy version to use"
         default: "latest"
         required: false
         type: string
-      tf_ai_autofix_tflint:
+      hcl_ai_autofix_tflint:
         description: "Whether to fix TFLint findings (Terraform)"
         required: false
         default: true
         type: boolean
-      tf_ai_autofix_trivy:
+      hcl_ai_autofix_trivy:
         description: "Whether to fix Trivy findings (Terraform)"
         required: false
         default: true
         type: boolean
-      tf_ai_autofix_checkov:
+      hcl_ai_autofix_checkov:
         description: "Whether to fix Checkov findings (Terraform)"
         required: false
         default: true
         type: boolean
-      tf_ai_autofix_tests:
+      hcl_ai_autofix_tests:
         description: "Whether to fix Terratest failures (Go test + Terraform examples)"
         required: false
         default: false
         type: boolean
-      tf_terratest_path:
+      hcl_terratest_path:
         description: "Path to terratest directory"
         default: "test/terratest"
         required: false
         type: string
-      tf_terratest_examples_path:
+      hcl_terratest_examples_path:
         description: "Path to terratest examples directory"
         default: "examples"
         required: false
         type: string
-      tf_ai_autofix_max_attempts:
+      hcl_ai_autofix_max_attempts:
         description: "Maximum number of Terraform autofix iterations on _ai branch"
         required: false
         default: 3
@@ -191,7 +196,7 @@ jobs:
           fi
           echo "iteration=${ITERATION}" >> "$GITHUB_OUTPUT"
 
-          MAX=${{ inputs.tf_ai_autofix_max_attempts }}
+          MAX=${{ inputs.hcl_ai_autofix_max_attempts }}
           if [[ "${ITERATION}" -ge "${MAX}" ]]; then
             echo "🛑 Max iterations (${MAX}) reached — stopping"
             echo "should_run=false" >> "$GITHUB_OUTPUT"
@@ -273,7 +278,7 @@ jobs:
           path: /tmp/autofix-findings
 
       - name: Download Terratest findings
-        if: inputs.tf_ai_autofix_tests
+        if: inputs.hcl_ai_autofix_tests
         id: dl_terratest
         continue-on-error: true
         uses: actions/download-artifact@v8
@@ -286,24 +291,33 @@ jobs:
       # TERRAFORM FMT (deterministic — no AI needed)
       # ══════════════════════════════════════════════════════════════════════
 
-      - name: Setup Terraform ${{ inputs.tf_version }}
+      - name: Setup Terraform ${{ inputs.hcl_engine_version }}
+        if: ${{ inputs.hcl_engine == 'terraform' }}
         uses: hashicorp/setup-terraform@v4
         with:
-          terraform_version: ${{ inputs.tf_version }}
+          terraform_version: ${{ inputs.hcl_engine_version }}
 
-      - name: Apply terraform fmt
+      - name: Setup OpenTofu ${{ inputs.hcl_engine_version }}
+        if: ${{ inputs.hcl_engine == 'opentofu' }}
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ inputs.hcl_engine_version }}
+
+      - name: Apply HCL fmt
         id: tf_fmt
+        env:
+          HCL_BINARY: ${{ inputs.hcl_engine == 'opentofu' && 'tofu' || 'terraform' }}
         run: |
-          if terraform fmt -check -recursive >/dev/null 2>&1; then
+          if $HCL_BINARY fmt -check -recursive >/dev/null 2>&1; then
             echo "changes=false" >> "$GITHUB_OUTPUT"
             echo "✅ Formatting already correct"
           else
-            terraform fmt -recursive
+            $HCL_BINARY fmt -recursive
             echo "changes=true" >> "$GITHUB_OUTPUT"
-            echo "✅ terraform fmt applied"
+            echo "✅ $HCL_BINARY fmt applied"
           fi
 
-      - name: Commit terraform fmt fixes
+      - name: Commit fmt fixes
         id: commit_fmt
         run: |
           if [[ -z "$(git status -s)" ]]; then
@@ -313,30 +327,30 @@ jobs:
           fi
 
           git add -A
-          git commit -m "fix(fmt): terraform fmt auto-fix
+          git commit -m "fix(fmt): ${{ inputs.hcl_engine }} fmt auto-fix
 
           copilot-autofix: true"
           echo "committed=true" >> "$GITHUB_OUTPUT"
-          echo "📝 Committed terraform fmt fixes"
+          echo "📝 Committed ${{ inputs.hcl_engine }} fmt fixes"
 
       # ══════════════════════════════════════════════════════════════════════
       # TFLINT
       # ══════════════════════════════════════════════════════════════════════
 
       - name: Set up TFLint
-        if: inputs.tf_ai_autofix_tflint
+        if: inputs.hcl_ai_autofix_tflint
         uses: terraform-linters/setup-tflint@v5
         with:
-          tflint_version: ${{ inputs.tf_lint_version }}
+          tflint_version: ${{ inputs.hcl_lint_version }}
 
       - name: Fetch TFLint config
-        if: inputs.tf_ai_autofix_tflint
+        if: inputs.hcl_ai_autofix_tflint
         run: |
           if [[ -f ".tflint.hcl" ]]; then
             echo "✅ Using local .tflint.hcl"
           else
             RESP=$(curl -s -w "\n%{http_code}" -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.tf_lint_config_path }}?ref=${{ inputs.gh_wf_config_repo_ref }}")
+              "https://api.github.com/repos/${{ inputs.gh_wf_config_repo }}/contents/${{ inputs.hcl_lint_config_path }}?ref=${{ inputs.gh_wf_config_repo_ref }}")
             CODE=$(echo "$RESP" | tail -n 1)
             BODY=$(echo "$RESP" | head -n -1)
             if [[ "$CODE" == "200" ]]; then
@@ -354,11 +368,11 @@ jobs:
           fi
 
       - name: Initialize TFLint
-        if: inputs.tf_ai_autofix_tflint
+        if: inputs.hcl_ai_autofix_tflint
         run: tflint --init
 
       - name: Run TFLint
-        if: inputs.tf_ai_autofix_tflint
+        if: inputs.hcl_ai_autofix_tflint
         id: run_tflint
         run: |
           # Use findings from upstream check job if available
@@ -384,7 +398,7 @@ jobs:
 
       - name: "🤖 Claude: Fix TFLint findings"
         id: claude_tflint
-        if: inputs.tf_ai_autofix_tflint && steps.run_tflint.outputs.has_findings == 'true'
+        if: inputs.hcl_ai_autofix_tflint && steps.run_tflint.outputs.has_findings == 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
@@ -420,14 +434,14 @@ jobs:
           show_full_output: true
 
       - name: "⚠️ Warn: TFLint Claude session incomplete"
-        if: always() && inputs.tf_ai_autofix_tflint && steps.run_tflint.outputs.has_findings == 'true' && steps.claude_tflint.outcome == 'failure'
+        if: always() && inputs.hcl_ai_autofix_tflint && steps.run_tflint.outputs.has_findings == 'true' && steps.claude_tflint.outcome == 'failure'
         run: |
           echo "::warning::Claude TFLint session did not complete (max-turns or API error) — partial fixes may have been applied"
           echo "⚠️ **Claude TFLint session incomplete** — hit max-turns or API error. Partial fixes may have been committed." >> $GITHUB_STEP_SUMMARY
 
       - name: Commit TFLint fixes
         id: commit_tflint
-        if: inputs.tf_ai_autofix_tflint
+        if: inputs.hcl_ai_autofix_tflint
         run: |
           if [[ -z "$(git status -s)" ]]; then
             echo "committed=false" >> "$GITHUB_OUTPUT"
@@ -450,13 +464,13 @@ jobs:
       # ══════════════════════════════════════════════════════════════════════
 
       - name: Install Trivy
-        if: inputs.tf_ai_autofix_trivy
+        if: inputs.hcl_ai_autofix_trivy
         uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514
         with:
-          version: ${{ inputs.tf_trivy_version }}
+          version: ${{ inputs.hcl_trivy_version }}
 
       - name: Run Trivy
-        if: inputs.tf_ai_autofix_trivy
+        if: inputs.hcl_ai_autofix_trivy
         id: run_trivy
         run: |
           # Use findings from upstream check job if available
@@ -483,7 +497,7 @@ jobs:
 
       - name: "🤖 Claude: Fix Trivy findings"
         id: claude_trivy
-        if: inputs.tf_ai_autofix_trivy && steps.run_trivy.outputs.has_findings == 'true'
+        if: inputs.hcl_ai_autofix_trivy && steps.run_trivy.outputs.has_findings == 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
@@ -521,14 +535,14 @@ jobs:
           show_full_output: true
 
       - name: "⚠️ Warn: Trivy Claude session incomplete"
-        if: always() && inputs.tf_ai_autofix_trivy && steps.run_trivy.outputs.has_findings == 'true' && steps.claude_trivy.outcome == 'failure'
+        if: always() && inputs.hcl_ai_autofix_trivy && steps.run_trivy.outputs.has_findings == 'true' && steps.claude_trivy.outcome == 'failure'
         run: |
           echo "::warning::Claude Trivy session did not complete (max-turns or API error) — partial fixes may have been applied"
           echo "⚠️ **Claude Trivy session incomplete** — hit max-turns or API error. Partial fixes may have been committed." >> $GITHUB_STEP_SUMMARY
 
       - name: Commit Trivy fixes
         id: commit_trivy
-        if: inputs.tf_ai_autofix_trivy
+        if: inputs.hcl_ai_autofix_trivy
         run: |
           if [[ -z "$(git status -s)" ]]; then
             echo "committed=false" >> "$GITHUB_OUTPUT"
@@ -551,17 +565,17 @@ jobs:
       # ══════════════════════════════════════════════════════════════════════
 
       - name: Set up Python
-        if: inputs.tf_ai_autofix_checkov
+        if: inputs.hcl_ai_autofix_checkov
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install Checkov
-        if: inputs.tf_ai_autofix_checkov
+        if: inputs.hcl_ai_autofix_checkov
         run: pip install checkov
 
       - name: Run Checkov
-        if: inputs.tf_ai_autofix_checkov
+        if: inputs.hcl_ai_autofix_checkov
         id: run_checkov
         run: |
           # Use findings from upstream check job if available
@@ -588,7 +602,7 @@ jobs:
 
       - name: "🤖 Claude: Fix Checkov findings"
         id: claude_checkov
-        if: inputs.tf_ai_autofix_checkov && steps.run_checkov.outputs.has_findings == 'true'
+        if: inputs.hcl_ai_autofix_checkov && steps.run_checkov.outputs.has_findings == 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
@@ -631,14 +645,14 @@ jobs:
           show_full_output: true
 
       - name: "⚠️ Warn: Checkov Claude session incomplete"
-        if: always() && inputs.tf_ai_autofix_checkov && steps.run_checkov.outputs.has_findings == 'true' && steps.claude_checkov.outcome == 'failure'
+        if: always() && inputs.hcl_ai_autofix_checkov && steps.run_checkov.outputs.has_findings == 'true' && steps.claude_checkov.outcome == 'failure'
         run: |
           echo "::warning::Claude Checkov session did not complete (max-turns or API error) — partial fixes may have been applied"
           echo "⚠️ **Claude Checkov session incomplete** — hit max-turns or API error. Partial fixes may have been committed." >> $GITHUB_STEP_SUMMARY
 
       - name: Commit Checkov fixes
         id: commit_checkov
-        if: inputs.tf_ai_autofix_checkov
+        if: inputs.hcl_ai_autofix_checkov
         run: |
           if [[ -z "$(git status -s)" ]]; then
             echo "committed=false" >> "$GITHUB_OUTPUT"
@@ -661,47 +675,47 @@ jobs:
       # ══════════════════════════════════════════════════════════════════════
 
       - name: Setup Go
-        if: inputs.tf_ai_autofix_tests
+        if: inputs.hcl_ai_autofix_tests
         uses: actions/setup-go@v6
         with:
           go-version: '1.24'
 
       - name: Configure Git for module access
-        if: inputs.tf_ai_autofix_tests
+        if: inputs.hcl_ai_autofix_tests
         run: |
           git config --global url."https://x-access-token:${{ steps.app_token.outputs.token }}@github.com/".insteadOf https://github.com/
 
       - name: Configure AWS Credentials via OIDC
-        if: inputs.tf_ai_autofix_tests
+        if: inputs.hcl_ai_autofix_tests
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_TESTBED_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_TESTBED_AWS_REGION }}
 
       - name: Prepare Terratest environment
-        if: inputs.tf_ai_autofix_tests
+        if: inputs.hcl_ai_autofix_tests
         run: |
           # Write testbed tfvars if available
           if [[ -n "${{ vars.AWS_TESTBED_TFVARS }}" ]]; then
-            echo "${{ vars.AWS_TESTBED_TFVARS }}" > ${{ inputs.tf_terratest_path }}/testbed.tfvar
+            echo "${{ vars.AWS_TESTBED_TFVARS }}" > ${{ inputs.hcl_terratest_path }}/testbed.tfvar
             echo "✅ Testbed tfvars written"
           fi
 
           # Write backend config if available
           if [[ -n "${{ vars.AWS_TESTBED_BACKEND_JSON }}" ]]; then
-            echo "${{ vars.AWS_TESTBED_BACKEND_JSON }}" > ${{ inputs.tf_terratest_path }}/backend.json
+            echo "${{ vars.AWS_TESTBED_BACKEND_JSON }}" > ${{ inputs.hcl_terratest_path }}/backend.json
             echo "✅ Backend config written"
           fi
 
           # Ensure Go dependencies are ready
-          cd ${{ inputs.tf_terratest_path }}
+          cd ${{ inputs.hcl_terratest_path }}
           go mod init test/terratest 2>/dev/null || true
           go get github.com/gruntwork-io/terratest/modules/terraform@v0.40.8
           go get github.com/stretchr/testify/assert@latest
           go mod tidy
 
       - name: Run Terratest
-        if: inputs.tf_ai_autofix_tests
+        if: inputs.hcl_ai_autofix_tests
         id: run_terratest
         run: |
           # Use findings from upstream check job if available
@@ -728,7 +742,7 @@ jobs:
 
       - name: "🤖 Claude: Fix Terratest failures"
         id: claude_terratest
-        if: inputs.tf_ai_autofix_tests && steps.run_terratest.outputs.has_failures == 'true'
+        if: inputs.hcl_ai_autofix_tests && steps.run_terratest.outputs.has_failures == 'true'
         timeout-minutes: 15
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
@@ -736,19 +750,19 @@ jobs:
           prompt: |
             Fix the Terratest failures listed in /tmp/terratest-output.txt.
 
-            Test directory: ${{ inputs.tf_terratest_path }}
-            Examples directory: ${{ inputs.tf_terratest_examples_path }}
+            Test directory: ${{ inputs.hcl_terratest_path }}
+            Examples directory: ${{ inputs.hcl_terratest_examples_path }}
 
             Steps:
             1. Read /tmp/terratest-output.txt to identify every failure and its root cause.
-            2. Inspect the Go test files in ${{ inputs.tf_terratest_path }}/ and the
-               Terraform example configs in ${{ inputs.tf_terratest_examples_path }}/.
+            2. Inspect the Go test files in ${{ inputs.hcl_terratest_path }}/ and the
+               Terraform example configs in ${{ inputs.hcl_terratest_examples_path }}/.
             3. Fix the root cause — this may be:
                - Terraform code issues in examples/ (.tf files)
                - Go test code issues in test/terratest/ (_test.go files)
                - Missing or incorrect variable/output definitions
                - Resource configuration errors
-            4. Re-run: cd ${{ inputs.tf_terratest_path }} && go test -v -timeout 10m
+            4. Re-run: cd ${{ inputs.hcl_terratest_path }} && go test -v -timeout 10m
             5. Iterate until all tests pass (max 2 re-runs to avoid long execution).
 
             Common fixes:
@@ -760,17 +774,17 @@ jobs:
 
 
             ✋ TEST-BED INTEGRATION CONSTRAINTS (MANDATORY):
-            The following files in ${{ inputs.tf_terratest_examples_path }}/** are part of test-bed integration
+            The following files in ${{ inputs.hcl_terratest_examples_path }}/** are part of test-bed integration
             and MUST NOT be modified:
               - backend.tf       (injected during CI)
               - variables.tf     (injected during CI)
               - provider.tf      (injected during CI)
             
-            Do NOT add or provide backend.tf or *.tfvars files in ${{ inputs.tf_terratest_path }}/** — they are
+            Do NOT add or provide backend.tf or *.tfvars files in ${{ inputs.hcl_terratest_path }}/** — they are
             injected by the GitHub Actions workflow and will conflict if pre-committed.
 
             Rules:
-            - Edit .tf files in ${{ inputs.tf_terratest_examples_path }}/** (except protected test-bed files) and .go files in ${{ inputs.tf_terratest_path }}/**.
+            - Edit .tf files in ${{ inputs.hcl_terratest_examples_path }}/** (except protected test-bed files) and .go files in ${{ inputs.hcl_terratest_path }}/**.
             - UPDATE go.mod and go.sum as needed to fix vulnerabilities or resolve test failures (run "go mod tidy" after changes).
             - Do NOT modify backend.tf, variables.tf, or provider.tf in examples/ (test-bed managed).
             - Do NOT commit .tfvars files (test-bed injected during CI).
@@ -788,14 +802,14 @@ jobs:
           show_full_output: true
 
       - name: "⚠️ Warn: Terratest Claude session incomplete"
-        if: always() && inputs.tf_ai_autofix_tests && steps.run_terratest.outputs.has_failures == 'true' && steps.claude_terratest.outcome == 'failure'
+        if: always() && inputs.hcl_ai_autofix_tests && steps.run_terratest.outputs.has_failures == 'true' && steps.claude_terratest.outcome == 'failure'
         run: |
           echo "::warning::Claude Terratest session did not complete (max-turns or API error) — partial fixes may have been applied"
           echo "⚠️ **Claude Terratest session incomplete** — hit max-turns or API error. Partial fixes may have been committed." >> $GITHUB_STEP_SUMMARY
 
       - name: Commit Terratest fixes
         id: commit_terratest
-        if: inputs.tf_ai_autofix_tests
+        if: inputs.hcl_ai_autofix_tests
         run: |
           if [[ -z "$(git status -s)" ]]; then
             echo "committed=false" >> "$GITHUB_OUTPUT"
@@ -872,12 +886,12 @@ jobs:
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| _ai branch | \`${{ needs.guard.outputs.ai_branch }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Feature branch | \`${{ needs.guard.outputs.feature_branch }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Iteration | ${{ needs.guard.outputs.iteration }} / ${{ inputs.tf_ai_autofix_max_attempts }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Iteration | ${{ needs.guard.outputs.iteration }} / ${{ inputs.hcl_ai_autofix_max_attempts }} |" >> $GITHUB_STEP_SUMMARY
           echo "| terraform fmt | ${{ steps.commit_fmt.outputs.committed == 'true' && '✅ Applied' || '⏭️ Clean' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| TFLint | ${{ inputs.tf_ai_autofix_tflint && '✅' || '⏭️' }} — committed: ${{ steps.commit_tflint.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Trivy | ${{ inputs.tf_ai_autofix_trivy && '✅' || '⏭️' }} — committed: ${{ steps.commit_trivy.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Checkov | ${{ inputs.tf_ai_autofix_checkov && '✅' || '⏭️' }} — committed: ${{ steps.commit_checkov.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Terratest | ${{ inputs.tf_ai_autofix_tests && '✅' || '⏭️' }} — committed: ${{ steps.commit_terratest.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| TFLint | ${{ inputs.hcl_ai_autofix_tflint && '✅' || '⏭️' }} — committed: ${{ steps.commit_tflint.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy | ${{ inputs.hcl_ai_autofix_trivy && '✅' || '⏭️' }} — committed: ${{ steps.commit_trivy.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Checkov | ${{ inputs.hcl_ai_autofix_checkov && '✅' || '⏭️' }} — committed: ${{ steps.commit_checkov.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Terratest | ${{ inputs.hcl_ai_autofix_tests && '✅' || '⏭️' }} — committed: ${{ steps.commit_terratest.outputs.committed || 'false' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Fixes applied | ${{ steps.set_outputs.outputs.fixes_applied || 'false' }} |" >> $GITHUB_STEP_SUMMARY
 
   # ── Create PR: _ai → feature ──────────────────────────────────────────

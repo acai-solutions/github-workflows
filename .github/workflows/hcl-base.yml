@@ -1,4 +1,4 @@
-name: Terraform Module Base Pipeline
+name: HCL Module Base Pipeline
 
 on:
   workflow_call:
@@ -23,12 +23,17 @@ on:
         default: "noreply@github.com"
         required: false
         type: string
-      tf_version:
-        description: "Terraform version used for formatting and docs"
+      hcl_engine:
+        description: "HCL engine to use: 'terraform' or 'opentofu'"
+        default: "terraform"
+        required: false
+        type: string
+      hcl_engine_version:
+        description: "Terraform/OpenTofu version used for formatting and docs"
         default: "latest"
         required: false
         type: string
-      tf_docs_skip:
+      hcl_docs_skip:
         description: "Skip Terraform docs generation"
         required: false
         default: false
@@ -37,7 +42,7 @@ on:
     outputs:
       all_checks_passed:
         description: "Indicates if all pipeline steps passed successfully"
-        value: ${{ jobs.tf_base_terraform_format.outputs.diff_exists == 'false' && (inputs.tf_docs_skip == true || jobs.tf_base_terraform_docs.outputs.diff_exists == 'false') }}
+        value: ${{ jobs.tf_base_terraform_format.outputs.diff_exists == 'false' && (inputs.hcl_docs_skip == true || jobs.tf_base_terraform_docs.outputs.diff_exists == 'false') }}
 
       format_status:
         description: "Terraform format check status"
@@ -45,7 +50,7 @@ on:
 
       docs_status:
         description: "Terraform docs generation status"
-        value: ${{ inputs.tf_docs_skip == true && 'skipped' || jobs.tf_base_terraform_docs.outputs.docs_status }}
+        value: ${{ inputs.hcl_docs_skip == true && 'skipped' || jobs.tf_base_terraform_docs.outputs.docs_status }}
 
 jobs:
 
@@ -64,16 +69,23 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Terraform
+        if: ${{ inputs.hcl_engine == 'terraform' }}
         uses: hashicorp/setup-terraform@v4
         with:
-          terraform_version: ${{ inputs.tf_version }}
+          terraform_version: ${{ inputs.hcl_engine_version }}
 
-      - name: Output Terraform Version
-        run: terraform version
+      - name: Setup OpenTofu
+        if: ${{ inputs.hcl_engine == 'opentofu' }}
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ inputs.hcl_engine_version }}
 
-      - name: Terraform Format
+      - name: Output HCL Engine Version
+        run: ${{ inputs.hcl_engine == 'opentofu' && 'tofu' || 'terraform' }} version
+
+      - name: HCL Format
         id: fmt
-        run: terraform fmt -recursive
+        run: ${{ inputs.hcl_engine == 'opentofu' && 'tofu' || 'terraform' }} fmt -recursive
 
       - name: Commit Format Changes
         id: fmt_commit
@@ -84,7 +96,7 @@ jobs:
               echo "diff=false" >> $GITHUB_OUTPUT
           else
               echo "diff=true" >> $GITHUB_OUTPUT
-              git diff-index --quiet HEAD || git commit -m "style(terraform fmt): format code" -a
+              git diff-index --quiet HEAD || git commit -m "style(${{ inputs.hcl_engine }} fmt): format code" -a
           fi
 
       - name: Push Format Changes
@@ -93,7 +105,7 @@ jobs:
 
   tf_base_terraform_docs:
     needs: tf_base_terraform_format
-    if: ${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' && inputs.tf_docs_skip != true }}
+    if: ${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' && inputs.hcl_docs_skip != true }}
     runs-on: ${{ inputs.runner_type }}
     outputs:
       docs_status: ${{ steps.docs.outcome }}
@@ -142,7 +154,7 @@ jobs:
     steps:
       - name: Output Summary
         run: |
-          echo '# 📝 Terraform Module Base Pipeline' >> $GITHUB_STEP_SUMMARY
+          echo '# 📝 HCL Module Base Pipeline (${{ inputs.hcl_engine }})' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '## Code Quality & Documentation' >> $GITHUB_STEP_SUMMARY
           echo '| Check | Status | Result |' >> $GITHUB_STEP_SUMMARY
@@ -150,13 +162,13 @@ jobs:
 
           echo "| 🎨 Terraform Format | ${{ needs.tf_base_terraform_format.outputs.fmt_status }} | ${{ needs.tf_base_terraform_format.outputs.diff_exists == 'true' && '⚠️ Changes committed' || '✅ No changes needed' }} |" >> $GITHUB_STEP_SUMMARY
 
-          if [[ "${{ inputs.tf_docs_skip }}" == "true" ]]; then
+          if [[ "${{ inputs.hcl_docs_skip }}" == "true" ]]; then
             echo "| 📚 Terraform Docs | ⏭️ Skipped | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| 📚 Terraform Docs | ${{ needs.tf_base_terraform_docs.outputs.docs_status }} | ${{ needs.tf_base_terraform_docs.outputs.diff_exists == 'true' && '⚠️ Docs updated' || '✅ Docs up to date' }} |" >> $GITHUB_STEP_SUMMARY
           fi
 
-          if [[ "${{ inputs.tf_docs_skip }}" == "true" ]]; then
+          if [[ "${{ inputs.hcl_docs_skip }}" == "true" ]]; then
             OVERALL_STATUS="${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' }}"
           else
             OVERALL_STATUS="${{ needs.tf_base_terraform_format.outputs.diff_exists == 'false' && needs.tf_base_terraform_docs.outputs.diff_exists == 'false' }}"

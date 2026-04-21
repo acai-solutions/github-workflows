@@ -1,4 +1,4 @@
-name: Terraform Module Release
+name: HCL Module Release
 
 on:
   workflow_call:
