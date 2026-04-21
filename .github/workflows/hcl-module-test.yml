@@ -141,7 +141,7 @@ jobs:
   terratest_run:
     needs:
       - terratest_config
-    name: terratest_run (${{ matrix.hcl_engine }} ${{ matrix.hcl_engine_version }}, ${{ matrix.test_bed }})
+    name: terratest_run (${{ matrix.hcl_engine }} ${{ matrix.hcl_engine_version }}, aws ${{ matrix.provider_version['hashicorp/aws'] }}, ${{ matrix.test_bed }})
     runs-on: ${{ inputs.runner_type }}
     outputs:
       terratest_status: ${{ steps.terratest_summary.outcome }}
