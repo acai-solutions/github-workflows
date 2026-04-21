@@ -48,7 +48,7 @@ jobs:
         id: app_token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets[inputs.app_id] }}
+          client-id: ${{ secrets[inputs.app_id] }}
           private-key: ${{ secrets[inputs.app_private_key] }}
 
       - name: "Create PR: *_ai → feature branch"
