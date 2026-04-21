@@ -227,7 +227,7 @@ jobs:
         id: app_token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.GH_RELEASE_APP_ID }}
+          client-id: ${{ secrets.GH_RELEASE_APP_ID }}
           private-key: ${{ secrets.GH_RELEASE_APP_PRIVATE_KEY }}
 
       - name: Checkout
@@ -339,7 +339,7 @@ jobs:
 
       - name: Set up TFLint
         if: inputs.hcl_ai_autofix_tflint
-        uses: terraform-linters/setup-tflint@v5
+        uses: terraform-linters/setup-tflint@v6
         with:
           tflint_version: ${{ inputs.hcl_lint_version }}
 

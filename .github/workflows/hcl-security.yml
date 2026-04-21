@@ -83,7 +83,7 @@ jobs:
 
       - name: Set up TFLint
         if: ${{ inputs.hcl_lint_include }}
-        uses: terraform-linters/setup-tflint@v5
+        uses: terraform-linters/setup-tflint@v6
         with:
           tflint_version: ${{ inputs.hcl_lint_version }}
 
