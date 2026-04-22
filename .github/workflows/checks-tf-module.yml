@@ -1,3 +1,4 @@
+# for backwards compatibility with existing callers of checks-tf-module.yml, which is referenced in many repos. New workflows should call checks-hcl-module.yml directly with hcl_engine=terraform instead of this shim.
 ---
 name: Terraform Module Checks
 on:
@@ -104,7 +105,7 @@ on:
         type: string
       tf_terratest_path:
         description: "Path to terratest directory"
-        default: "test/terratest"
+        default: "tests/terratest"
         required: false
         type: string
       tf_terratest_examples_path:
@@ -148,171 +149,54 @@ on:
     outputs:
       all_checks_passed:
         description: Indicates if all pipeline steps passed successfully
-        value: ${{ jobs.terraform_base.outputs.all_checks_passed == 'true' &&
-          jobs.terraform_security.outputs.all_checks_passed == 'true' &&
-          (inputs.tf_terratest_run_tests != true || jobs.terraform_module_test.outputs.all_checks_passed == 'true') }}
+        value: ${{ jobs.hcl_checks.outputs.all_checks_passed }}
       terraform_base_status:
         description: Terraform base pipeline status
-        value: ${{ jobs.terraform_base.outputs.all_checks_passed }}
+        value: ${{ jobs.hcl_checks.outputs.hcl_base_status }}
       security_status:
         description: Security checks status
-        value: ${{ jobs.terraform_security.outputs.all_checks_passed }}
+        value: ${{ jobs.hcl_checks.outputs.security_status }}
       autofix_applied:
         description: Whether terraform-ai-autofix was applied
-        value: ${{ jobs.terraform_ai_autofix.outputs.fixes_applied }}
+        value: ${{ jobs.hcl_checks.outputs.autofix_applied }}
       ai_branch:
         description: Name of the _cop branch used for fixes
-        value: ${{ jobs.terraform_ai_autofix.outputs.ai_branch }}
-
-concurrency:
-  group: ${{ format('{0}:{1}', inputs.concurrency_group, github.workflow) }}
-  cancel-in-progress: true
+        value: ${{ jobs.hcl_checks.outputs.ai_branch }}
 
 jobs:
-  # ── Base: format + docs ─────────────────────────────────────────────
-  terraform_base:
-    if: ${{ always() }}
-    uses: ./.github/workflows/tf-base.yml
+  # ╔═══════════════════════════════════════════════════════════════════════╗
+  # ║  DEPRECATED — backwards-compatibility shim                           ║
+  # ║  Delegates to checks-hcl-module.yml with hcl_engine=terraform.       ║
+  # ║  New callers should use checks-hcl-module.yml directly.              ║
+  # ╚═══════════════════════════════════════════════════════════════════════╝
+  hcl_checks:
+    uses: ./.github/workflows/checks-hcl-module.yml
     with:
       concurrency_group: ${{ inputs.concurrency_group }}
       runner_type: ${{ inputs.runner_type }}
       commit_user: ${{ inputs.commit_user }}
       commit_email: ${{ inputs.commit_email }}
-      tf_version: ${{ inputs.tf_version }}
-      tf_docs_skip: ${{ inputs.tf_docs_skip }}
-
-  # ── Security: TFLint + Trivy + Checkov ──────────────────────────────
-  terraform_security:
-    needs: terraform_base
-    if: ${{ needs.terraform_base.result == 'success' }}
-    uses: ./.github/workflows/tf-security.yml
-    with:
-      concurrency_group: ${{ inputs.concurrency_group }}
-      runner_type: ${{ inputs.runner_type }}
       gh_wf_config_repo: ${{ inputs.gh_wf_config_repo }}
       gh_wf_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
-      tf_lint_include: ${{ inputs.tf_lint_include }}
-      tf_lint_config_path: ${{ inputs.tf_lint_config_path }}
-      tf_lint_version: ${{ inputs.tf_lint_version }}
-      tf_lint_allow_failures: ${{ inputs.tf_lint_allow_failures }}
-      tf_trivy_version: ${{ inputs.tf_trivy_version }}
-      tf_checkov_failures_allow: ${{ inputs.tf_checkov_failures_allow }}
-
-  # ── Terratest ───────────────────────────────────────────────────────
-  terraform_module_test:
-    needs: terraform_security
-    if: ${{ inputs.tf_terratest_run_tests && needs.terraform_security.outputs.all_checks_passed == 'true' }}
-    uses: ./.github/workflows/tf-module-test.yml
-    with:
-      tf_version: ${{ inputs.tf_version }}
-      tf_terratest_config_repo: ${{ inputs.gh_wf_config_repo }}
-      tf_terratest_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
-      tf_terratest_path: ${{ inputs.tf_terratest_path }}
-      tf_terratest_examples_path: ${{ inputs.tf_terratest_examples_path }}
-      tf_test_beds: ${{ inputs.tf_test_beds }}
-      tf_test_bed_aws_terratest_config: ${{ inputs.tf_test_bed_aws_terratest_config }}
-      tf_test_bed_aws_esc_terratest_config: ${{ inputs.tf_test_bed_aws_esc_terratest_config }}
-    secrets: inherit
-
-  # ── AI Autofix on _cop branch (only when checks fail) ───────────────
-  terraform_ai_autofix:
-    needs:
-      - terraform_base
-      - terraform_security
-      - terraform_module_test
-    if: |
-      always() &&
-      inputs.tf_ai_autofix_include &&
-      (needs.terraform_base.outputs.all_checks_passed != 'true' ||
-       needs.terraform_security.outputs.all_checks_passed != 'true' ||
-       (needs.terraform_module_test.result != 'skipped' &&
-        needs.terraform_module_test.outputs.all_checks_passed != 'true')) &&
-      !(needs.terraform_base.result == 'skipped' &&
-        needs.terraform_security.result == 'skipped' &&
-        needs.terraform_module_test.result == 'skipped')
-    uses: ./.github/workflows/ai-autofix-terraform.yml
-    with:
-      runner_type: ${{ inputs.runner_type }}
-      tf_version: ${{ inputs.tf_version }}
-      gh_wf_config_repo: ${{ inputs.gh_wf_config_repo }}
-      gh_wf_config_repo_ref: ${{ inputs.gh_wf_config_repo_ref }}
-      tf_lint_config_path: ${{ inputs.tf_lint_config_path }}
-      tf_lint_version: ${{ inputs.tf_lint_version }}
-      tf_trivy_version: ${{ inputs.tf_trivy_version }}
-      commit_user: ${{ inputs.commit_user }}
-      commit_email: ${{ inputs.commit_email }}
-      tf_ai_autofix_tflint: ${{ inputs.tf_ai_autofix_tflint }}
-      tf_ai_autofix_trivy: ${{ inputs.tf_ai_autofix_trivy }}
-      tf_ai_autofix_checkov: ${{ inputs.tf_ai_autofix_checkov }}
-      tf_ai_autofix_tests: ${{ inputs.tf_ai_autofix_tests }}
-      tf_terratest_path: ${{ inputs.tf_terratest_path }}
-      tf_terratest_examples_path: ${{ inputs.tf_terratest_examples_path }}
-      tf_ai_autofix_max_attempts: ${{ inputs.tf_ai_autofix_max_attempts }}
-    secrets: inherit
-
-  # ── Summary gate ────────────────────────────────────────────────────
-  tf_module_checks_summary:
-    needs:
-      - terraform_base
-      - terraform_security
-      - terraform_module_test
-      - terraform_ai_autofix
-    runs-on: ${{ inputs.runner_type }}
-    if: always()
-    steps:
-      - name: Summary
-        run: |
-          echo '# 📊 Terraform Module Checks' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo '| Component | Status |' >> $GITHUB_STEP_SUMMARY
-          echo '|-----------|--------|' >> $GITHUB_STEP_SUMMARY
-          echo "| 📝 Base (Format & Docs) | ${{ needs.terraform_base.outputs.all_checks_passed == 'true' && '✅' || needs.terraform_base.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🔒 Security | ${{ needs.terraform_security.outputs.all_checks_passed == 'true' && '✅' || needs.terraform_security.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          if [[ "${{ inputs.tf_terratest_run_tests }}" == "true" ]]; then
-            echo "| 🧪 Terratest | ${{ needs.terraform_module_test.outputs.all_checks_passed == 'true' && '✅' || needs.terraform_module_test.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "| 🤖 AI Autofix | ${{ needs.terraform_ai_autofix.outputs.fixes_applied == 'true' && '✅ Applied' || needs.terraform_ai_autofix.result == 'skipped' && '⏭️' || '—' }} |" >> $GITHUB_STEP_SUMMARY
-
-      - name: Gate
-        if: always()
-        run: |
-          BASE="${{ needs.terraform_base.outputs.all_checks_passed == 'true' }}"
-          SEC="${{ needs.terraform_security.outputs.all_checks_passed == 'true' }}"
-          TEST="${{ inputs.tf_terratest_run_tests != true || needs.terraform_module_test.outputs.all_checks_passed == 'true' }}"
-
-          if [[ "$BASE" != "true" || "$SEC" != "true" || "$TEST" != "true" ]]; then
-            echo "::error::Some checks failed."
-            exit 1
-          fi
-
-  # ── Create PR: _ai → feature (when _ai branch passes all checks) ───
-  create_ai_pr_on_pass:
-    needs:
-      - terraform_base
-      - terraform_security
-      - terraform_module_test
-    if: |
-      always() &&
-      inputs.tf_ai_autofix_include &&
-      endsWith(github.head_ref || github.ref_name, '_ai') &&
-      needs.terraform_base.outputs.all_checks_passed == 'true' &&
-      needs.terraform_security.outputs.all_checks_passed == 'true' &&
-      (inputs.tf_terratest_run_tests != true || needs.terraform_module_test.outputs.all_checks_passed == 'true')
-    uses: ./.github/workflows/ai-autofix-create-ai-pr.yml
-    with:
-      runner_type: ${{ inputs.runner_type }}
-      app_id: GH_RELEASE_APP_ID
-      app_private_key: GH_RELEASE_APP_PRIVATE_KEY
-      ai_branch: ${{ github.head_ref || github.ref_name }}
-      pr_title: "fix: Terraform autofix for `${{ github.head_ref || github.ref_name }}`"
-      pr_body: |
-        ## 🤖 Terraform AI Autofix (Claude Code)
-
-        All checks passed on `${{ github.head_ref || github.ref_name }}`.
-
-        > Review and merge to apply fixes to the feature branch.
-      pr_ready_comment: |
-        ✅ **All checks passed** on `${{ github.head_ref || github.ref_name }}`.
-
-        This PR is ready for review and merge.
+      hcl_engine: terraform
+      hcl_engine_version: ${{ inputs.tf_version }}
+      hcl_docs_skip: ${{ inputs.tf_docs_skip }}
+      hcl_lint_include: ${{ inputs.tf_lint_include }}
+      hcl_lint_config_path: ${{ inputs.tf_lint_config_path }}
+      hcl_lint_version: ${{ inputs.tf_lint_version }}
+      hcl_lint_allow_failures: ${{ inputs.tf_lint_allow_failures }}
+      hcl_trivy_version: ${{ inputs.tf_trivy_version }}
+      hcl_checkov_failures_allow: ${{ inputs.tf_checkov_failures_allow }}
+      hcl_terratest_run_tests: ${{ inputs.tf_terratest_run_tests }}
+      hcl_test_beds: ${{ inputs.tf_test_beds }}
+      hcl_test_bed_aws_terratest_configs: ${{ format('["{0}"]', inputs.tf_test_bed_aws_terratest_config) }}
+      hcl_test_bed_aws_esc_terratest_configs: ${{ format('["{0}"]', inputs.tf_test_bed_aws_esc_terratest_config) }}
+      hcl_terratest_path: ${{ inputs.tf_terratest_path }}
+      hcl_terratest_examples_path: ${{ inputs.tf_terratest_examples_path }}
+      hcl_ai_autofix_include: ${{ inputs.tf_ai_autofix_include }}
+      hcl_ai_autofix_tflint: ${{ inputs.tf_ai_autofix_tflint }}
+      hcl_ai_autofix_trivy: ${{ inputs.tf_ai_autofix_trivy }}
+      hcl_ai_autofix_checkov: ${{ inputs.tf_ai_autofix_checkov }}
+      hcl_ai_autofix_tests: ${{ inputs.tf_ai_autofix_tests }}
+      hcl_ai_autofix_max_attempts: ${{ inputs.tf_ai_autofix_max_attempts }}
     secrets: inherit
