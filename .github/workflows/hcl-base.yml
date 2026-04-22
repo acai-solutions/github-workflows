@@ -76,7 +76,7 @@ jobs:
 
       - name: Setup OpenTofu
         if: ${{ inputs.hcl_engine == 'opentofu' }}
-        uses: opentofu/setup-opentofu@v1
+        uses: opentofu/setup-opentofu@v2
         with:
           tofu_version: ${{ inputs.hcl_engine_version }}
 
