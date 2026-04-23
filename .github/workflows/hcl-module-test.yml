@@ -271,6 +271,14 @@ jobs:
         env:
           PROVIDER_JSON: ${{ toJson(matrix.provider_version) }}
         run: |
+          # Determine registry based on HCL engine
+          if [[ "${{ matrix.hcl_engine }}" == "opentofu" ]]; then
+            REGISTRY_HOST="registry.opentofu.org"
+            REGISTRY_API="https://registry.opentofu.org/v1/providers"
+          else
+            REGISTRY_HOST="${{ inputs.hcl_registry_hostname }}"
+            REGISTRY_API="https://${{ inputs.hcl_registry_hostname }}/v1/providers"
+          fi
           for d in */; do
             # create artifact name for github action
             artifact_name="${{ matrix.hcl_engine }} version $(echo "${{ matrix.hcl_engine_version }}")<br>"
@@ -281,7 +289,7 @@ jobs:
               version=$(jq -r ".\"$provider\"" <<< $PROVIDER_JSON)
               # get provider version if contains X from terraform registry
               if [[ "$version" == *"X"* ]]; then
-                for i in $(curl -s https://registry.terraform.io/v1/providers/$provider | jq -r '.versions' | jq 'reverse' | jq '.[]'); do
+                for i in $(curl -s ${REGISTRY_API}/$provider | jq -r '.versions' | jq 'reverse' | jq '.[]'); do
                   i=$(echo $i | tr -d '"')
                   declare -a semver
                   semver=($(echo "$version" | tr '.' '\n'))
@@ -314,7 +322,7 @@ jobs:
               # append provider versions to artifact name
               artifact_name+="provider $(echo "$provider" | sed 's:\/:\.:g') = ${version}<br>"
               # generate terraform lock file for each provider in each terratest example directory
-              echo -en "provider \"${{ inputs.hcl_registry_hostname }}/$provider\" {\n  version = \"$version\"\n}\n\n" >> "$d/.terraform.lock.hcl"
+              echo -en "provider \"${REGISTRY_HOST}/$provider\" {\n  version = \"$version\"\n}\n\n" >> "$d/.terraform.lock.hcl"
             done
             cat "$d/.terraform.lock.hcl"
             echo "artifact_name=${artifact_name}" >> $GITHUB_OUTPUT
