@@ -274,10 +274,8 @@ jobs:
           # Determine registry based on HCL engine
           if [[ "${{ matrix.hcl_engine }}" == "opentofu" ]]; then
             REGISTRY_HOST="registry.opentofu.org"
-            REGISTRY_API="https://registry.opentofu.org/v1/providers"
           else
             REGISTRY_HOST="${{ inputs.hcl_registry_hostname }}"
-            REGISTRY_API="https://${{ inputs.hcl_registry_hostname }}/v1/providers"
           fi
           for d in */; do
             # create artifact name for github action
@@ -287,9 +285,17 @@ jobs:
             # get required provider versions from matrix json
             for provider in $(jq -r 'keys | .[]' <<< $PROVIDER_JSON); do
               version=$(jq -r ".\"$provider\"" <<< $PROVIDER_JSON)
-              # get provider version if contains X from terraform registry
+              # get provider version if contains X from registry
               if [[ "$version" == *"X"* ]]; then
-                for i in $(curl -s ${REGISTRY_API}/$provider | jq -r '.versions' | jq 'reverse' | jq '.[]'); do
+                # Fetch all versions from the appropriate registry
+                if [[ "${{ matrix.hcl_engine }}" == "opentofu" ]]; then
+                  # OpenTofu: /v1/providers/{ns}/{name}/versions returns {"versions":[{"version":"..."},..]}
+                  ALL_VERSIONS=$(curl -s "https://registry.opentofu.org/v1/providers/$provider/versions" | jq -r '[.versions[].version] | reverse | .[]')
+                else
+                  # Terraform: /v1/providers/{ns}/{name} returns {"versions":["...",...]}
+                  ALL_VERSIONS=$(curl -s "https://registry.terraform.io/v1/providers/$provider" | jq -r '.versions | reverse | .[]')
+                fi
+                for i in $ALL_VERSIONS; do
                   i=$(echo $i | tr -d '"')
                   declare -a semver
                   semver=($(echo "$version" | tr '.' '\n'))
