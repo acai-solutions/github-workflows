@@ -290,10 +290,10 @@ jobs:
                 # Fetch all versions from the appropriate registry
                 if [[ "${{ matrix.hcl_engine }}" == "opentofu" ]]; then
                   # OpenTofu: /v1/providers/{ns}/{name}/versions returns {"versions":[{"version":"..."},..]}
-                  ALL_VERSIONS=$(curl -s "https://registry.opentofu.org/v1/providers/$provider/versions" | jq -r '[.versions[].version] | reverse | .[]')
+                  ALL_VERSIONS=$(curl -s "https://registry.opentofu.org/v1/providers/$provider/versions" | jq -r '[.versions[].version | select(contains("-") | not)] | reverse | .[]')
                 else
-                  # Terraform: /v1/providers/{ns}/{name} returns {"versions":["...",...]}
-                  ALL_VERSIONS=$(curl -s "https://registry.terraform.io/v1/providers/$provider" | jq -r '.versions | reverse | .[]')
+                  # Terraform: /v1/providers/{ns}/{name} returns {"versions":["...",...]
+                  ALL_VERSIONS=$(curl -s "https://registry.terraform.io/v1/providers/$provider" | jq -r '[.versions[] | select(contains("-") | not)] | reverse | .[]')
                 fi
                 for i in $ALL_VERSIONS; do
                   i=$(echo $i | tr -d '"')
