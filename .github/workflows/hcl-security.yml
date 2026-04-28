@@ -229,8 +229,11 @@ jobs:
           BC_FROM_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
           BC_TO_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
           BC_COMMIT_HASH: ${{ github.sha }}
-          # Increase HCL2 parser timeout from default 10s to 60s to avoid timeouts on external modules
+          # Increase HCL2 parser timeout from default 10s to 60s to avoid timeouts on complex/external modules
+          # PYHCL2_TIMEOUT: legacy env var name (Checkov 2.x)
+          # CHECKOV_PARSE_TIMEOUT: current env var name (Checkov 3.x parser_utils.py)
           PYHCL2_TIMEOUT: "60"
+          CHECKOV_PARSE_TIMEOUT: "60"
         with:
           directory: .
           framework: terraform
