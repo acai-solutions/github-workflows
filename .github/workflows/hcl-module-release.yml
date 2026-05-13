@@ -74,10 +74,19 @@ jobs:
       - name: Check Branch Protection
         if: ${{ inputs.toggle_branch_protection }}
         id: get_branch_protection
-        continue-on-error: true
         run: |
-          gh api /repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection > branch_protection.json
-          echo "status=200" >> $GITHUB_OUTPUT
+          set +e
+          response=$(gh api "/repos/${{ github.repository }}/branches/${{ inputs.release_branch }}/protection" 2>/dev/null)
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "$response" > branch_protection.json
+            echo "status=200" >> $GITHUB_OUTPUT
+            echo "Branch '${{ inputs.release_branch }}' is protected — protection will be toggled."
+          else
+            echo "status=404" >> $GITHUB_OUTPUT
+            echo "Branch '${{ inputs.release_branch }}' is not protected — skipping protection toggle."
+          fi
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
       
