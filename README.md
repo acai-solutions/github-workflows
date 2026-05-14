@@ -38,7 +38,7 @@ This repository provides reusable [GitHub Workflows][github_workflows_link] desi
 | `python-test.yml` | Pytest matrix — runs tests per module in parallel with coverage |
 | `hcl-base.yml` | HCL base pipeline — `terraform fmt` and `terraform-docs` generation |
 | `hcl-security.yml` | HCL security pipeline — TFLint, Trivy (reviewdog on PRs / SARIF on push), Checkov |
-| `hcl-module-test.yml` | Terratest pipeline — matrix-based integration tests with AWS OIDC authentication |
+| `hcl-module-test.yml` | Terratest pipeline — matrix-based integration tests with AWS OIDC authentication ([docs](docs/terratest.md), [reference module](sample-terraform-module)) |
 | `hcl-module-release.yml` | Semantic release pipeline — automated versioning and changelog generation |
 
 ### AI Autofix Workflows
