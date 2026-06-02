@@ -678,7 +678,7 @@ jobs:
         if: inputs.hcl_ai_autofix_tests
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.26'
 
       - name: Configure Git for module access
         if: inputs.hcl_ai_autofix_tests
@@ -709,10 +709,15 @@ jobs:
 
           # Ensure Go dependencies are ready
           cd ${{ inputs.hcl_terratest_path }}
-          go mod init test/terratest 2>/dev/null || true
-          go get github.com/gruntwork-io/terratest/modules/terraform@v0.40.8
-          go get github.com/stretchr/testify/assert@latest
-          go mod tidy
+          if [ -f go.mod ] || [ -f go.sum ]; then
+            echo "✅ go.mod/go.sum already present — skipping init/tidy"
+          else
+            echo "ℹ️ No go.mod/go.sum found — initializing module"
+            go mod init test/terratest
+            go get github.com/gruntwork-io/terratest/modules/terraform@v0.40.8
+            go get github.com/stretchr/testify/assert@latest
+            go mod tidy
+          fi
 
       - name: Run Terratest
         if: inputs.hcl_ai_autofix_tests
